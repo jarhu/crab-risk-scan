@@ -1,0 +1,2 @@
+# Build backend for `pip install --no-build-isolation` of CRAB in the images. Keep equal to [build-system] in pyproject.toml.
+setuptools==84.2.1

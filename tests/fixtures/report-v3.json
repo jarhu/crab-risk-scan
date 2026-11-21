@@ -1,0 +1,672 @@
+{
+  "schema_version": 3,
+  "tool": {
+    "name": "crab-risk-scan",
+    "version": "0.3.0"
+  },
+  "target": "demo-service",
+  "revision": "4f1c2e9",
+  "branch": "main",
+  "repository": "https://github.com/example/demo-service",
+  "files_scanned": 42,
+  "imports": [
+    {
+      "input": 1,
+      "producer": "bandit",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "1.8.6",
+      "rule_pack": "bandit-default",
+      "targets": null
+    },
+    {
+      "input": 2,
+      "producer": "opengrep",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "2.0.0",
+      "rule_pack": "crab-v1",
+      "targets": null
+    },
+    {
+      "input": 3,
+      "producer": "gitleaks",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "8.28.0",
+      "rule_pack": "gitleaks-default",
+      "targets": null
+    },
+    {
+      "input": 4,
+      "producer": "trivy",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "0.72.0",
+      "rule_pack": null,
+      "targets": 1
+    },
+    {
+      "input": 5,
+      "producer": "osv",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "2.2.3",
+      "rule_pack": null,
+      "targets": 1
+    },
+    {
+      "input": 6,
+      "producer": "checkov",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "3.2.495",
+      "rule_pack": "checkov-default",
+      "targets": null
+    },
+    {
+      "input": 7,
+      "producer": "sarif",
+      "origin": "report",
+      "status": "imported",
+      "producer_version": "2.22.0",
+      "rule_pack": null,
+      "targets": null
+    },
+    {
+      "input": 8,
+      "producer": "trivy-image",
+      "origin": "report",
+      "status": "imported",
+      "producer_version": "0.72.0",
+      "rule_pack": null,
+      "targets": 2
+    },
+    {
+      "input": 9,
+      "producer": "shellcheck",
+      "origin": "engine",
+      "status": "complete",
+      "producer_version": "0.11.0",
+      "rule_pack": "crab-shellcheck-v1",
+      "targets": null
+    },
+    {
+      "input": 10,
+      "producer": "psscriptanalyzer",
+      "origin": "engine",
+      "status": "skipped",
+      "reason": "not_installed",
+      "producer_version": null,
+      "rule_pack": null,
+      "targets": null
+    }
+  ],
+  "findings": [
+    {
+      "fingerprint": "9ff6cbee0ed3bf31ff19e89d812756371bf6cc184aff9da64f471a04b106d71d",
+      "producer": "gitleaks",
+      "producer_version": "8.28.0",
+      "rule_pack": "gitleaks-default",
+      "module": "Sniffer",
+      "category": "secrets",
+      "kind": "vulnerability",
+      "rule": "aws-access-token",
+      "severity": "critical",
+      "original_severity": "unknown",
+      "message": "Review the credential detector match and rotate any exposed credential.",
+      "path": "config/app.env",
+      "line": 3,
+      "end_line": 3,
+      "column": 12,
+      "end_column": 32,
+      "cwe": [
+        "CWE-798"
+      ],
+      "inputs": [
+        3
+      ],
+      "new": false,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "e62f4fdbe746d4523d25c85013967ec993a3e20963707685dab24729f549bd68",
+      "producer": "trivy",
+      "producer_version": "0.72.0",
+      "rule_pack": null,
+      "module": "Shell",
+      "category": "sca",
+      "kind": "vulnerability",
+      "rule": "CVE-2099-0001",
+      "severity": "critical",
+      "original_severity": "CRITICAL",
+      "message": "Review the installed dependency against this advisory.",
+      "path": "package-lock.json",
+      "line": null,
+      "package": {
+        "ecosystem": "npm",
+        "name": "widget",
+        "version": "1.0.0",
+        "purl": "pkg:npm/widget@1.0.0"
+      },
+      "manifest": "package-lock.json",
+      "risk_type": "vulnerability",
+      "fixed_version": "1.0.1",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 9.8,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "source": "nvd"
+      },
+      "epss": {
+        "score": 0.9731,
+        "percentile": 0.9993,
+        "date": "2026-11-19"
+      },
+      "kev": true,
+      "help_uri": "https://avd.aquasec.com/nvd/cve-2099-0001",
+      "aliases": [
+        "GHSA-demo-0001"
+      ],
+      "inputs": [
+        4,
+        5
+      ],
+      "inventory_components": [
+        0
+      ],
+      "new": true,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "bb34c91a943fabb96d2a8d942222427e1d469e7303b814ebd364a77bd8f00f14",
+      "producer": "osv",
+      "producer_version": "2.2.3",
+      "rule_pack": null,
+      "module": "Shell",
+      "category": "sca",
+      "kind": "vulnerability",
+      "rule": "MAL-2026-1234",
+      "severity": "critical",
+      "original_severity": "unknown",
+      "message": "Remove this package. It is listed as malicious.",
+      "path": "package-lock.json",
+      "line": null,
+      "package": {
+        "ecosystem": "npm",
+        "name": "evil-pkg",
+        "version": "6.6.6",
+        "purl": "pkg:npm/evil-pkg@6.6.6"
+      },
+      "manifest": "package-lock.json",
+      "risk_type": "malicious",
+      "aliases": [],
+      "inputs": [
+        5
+      ],
+      "inventory_components": [
+        1
+      ],
+      "new": true,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "b528b5d59cd8c9b793fde54bc99de513e160ab2afc40a8cec52d6b0bc908d1f5",
+      "producer": "crab",
+      "producer_version": "0.3.0",
+      "rule_pack": "policy",
+      "module": "Shell",
+      "category": "sca",
+      "kind": "vulnerability",
+      "rule": "CRAB-LIC-001",
+      "severity": "high",
+      "original_severity": "high",
+      "message": "This dependency's license is denied by the project policy.",
+      "path": null,
+      "line": null,
+      "package": {
+        "ecosystem": "npm",
+        "name": "agpl-lib",
+        "version": "2.0.0",
+        "purl": "pkg:npm/agpl-lib@2.0.0"
+      },
+      "manifest": null,
+      "risk_type": "license",
+      "license": "AGPL-3.0-only",
+      "inventory_components": [
+        2
+      ],
+      "new": true,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "899da53e0c8461c077337d6c104ae121649d7d4d39ed8b3ad092ed5265fb521f",
+      "producer": "trivy",
+      "producer_version": "0.72.0",
+      "rule_pack": null,
+      "module": "Exoskeleton",
+      "category": "container",
+      "kind": "vulnerability",
+      "rule": "CVE-2099-0002",
+      "severity": "high",
+      "original_severity": "HIGH",
+      "message": "Review the installed dependency against this advisory.",
+      "path": null,
+      "line": null,
+      "package": {
+        "ecosystem": "debian",
+        "name": "openssl",
+        "version": "3.0.11-1",
+        "purl": "pkg:deb/debian/openssl@3.0.11-1?distro=debian-12"
+      },
+      "manifest": null,
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "risk_type": "vulnerability",
+      "fixed_version": "3.0.15-1",
+      "cwe": [
+        "CWE-787"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "nvd"
+      },
+      "inputs": [
+        8
+      ],
+      "inventory_components": [],
+      "new": false,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "4bd3db4c8425e7b6bcadef2a85206a75e14c3f26e0c68ac3e0ee046fd560e2fc",
+      "producer": "gosec",
+      "producer_version": "2.22.0",
+      "rule_pack": null,
+      "module": "Claws",
+      "category": "sast",
+      "kind": "vulnerability",
+      "rule": "G204",
+      "severity": "high",
+      "original_severity": "error",
+      "message": "Review gosec rule G204 at the reported location.",
+      "path": "cmd/run.go",
+      "line": 27,
+      "end_line": 27,
+      "column": 9,
+      "end_column": 40,
+      "cwe": [
+        "CWE-78"
+      ],
+      "help_uri": "https://securego.io/docs/rules/g204.html",
+      "inputs": [
+        7
+      ],
+      "new": false,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "71474e14aed5e75184570d0d777afd19ddc2724d86395145881c9aa6946add1e",
+      "producer": "crab",
+      "producer_version": "0.3.0",
+      "rule_pack": "pinch-v1",
+      "module": "Burrow",
+      "category": "iac",
+      "kind": "review",
+      "rule": "CRAB-CTR-001",
+      "severity": "medium",
+      "original_severity": "medium",
+      "message": "Final stage explicitly selects root. Review whether a non-root USER is sufficient.",
+      "path": "Dockerfile",
+      "line": 6,
+      "suppressed": true,
+      "exception": {
+        "status": "not_affected",
+        "justification": "protected_at_runtime",
+        "reason": "The orchestrator enforces runAsNonRoot.",
+        "reviewer": "platform-team"
+      },
+      "new": false
+    },
+    {
+      "fingerprint": "6f239ea985fb78b74f0e070c93f1740465f6b3fd4c135b359b7a7e778e5d5e9b",
+      "producer": "bandit",
+      "producer_version": "1.8.6",
+      "rule_pack": "bandit-default",
+      "module": "Claws",
+      "category": "sast",
+      "kind": "vulnerability",
+      "rule": "B323",
+      "severity": "medium",
+      "original_severity": "MEDIUM",
+      "message": "Review bandit rule B323 at the reported location.",
+      "path": "src/client.py",
+      "line": 4,
+      "end_line": 4,
+      "confidence": "HIGH",
+      "byte_offset": 10,
+      "end_byte_offset": 42,
+      "cwe": [
+        "CWE-295"
+      ],
+      "help_uri": "https://bandit.readthedocs.io/en/1.8.6/plugins/b323_unverified_context.html",
+      "inputs": [
+        1
+      ],
+      "new": false,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "6577deb6654b980be47988b075ee24e6ed782d740ac81a745021d91b7a1852fa",
+      "producer": "crab",
+      "producer_version": "0.3.0",
+      "rule_pack": "pinch-v1",
+      "module": "Claws",
+      "category": "sast",
+      "kind": "review",
+      "rule": "CRAB-PY-001",
+      "severity": "medium",
+      "original_severity": "medium",
+      "message": "Review use of an unverified TLS context. Prefer ssl.create_default_context().",
+      "path": "src/client.py",
+      "line": 4,
+      "end_line": 4,
+      "byte_offset": 10,
+      "end_byte_offset": 42,
+      "cwe": [
+        "CWE-295"
+      ],
+      "new": false,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "410d8ae370a4a68e0e4b2175691a010bba9f6c4b1c49c35bc77b999cf7504a1d",
+      "producer": "opengrep",
+      "producer_version": "2.0.0",
+      "rule_pack": "crab-v1",
+      "module": "Claws",
+      "category": "sast",
+      "kind": "review",
+      "rule": "crab-dom-html",
+      "severity": "medium",
+      "original_severity": "WARNING",
+      "message": "Review opengrep rule crab-dom-html at the reported location.",
+      "path": "web/app.ts",
+      "line": 12,
+      "end_line": 12,
+      "column": 5,
+      "end_column": 29,
+      "cwe": [
+        "CWE-79"
+      ],
+      "inputs": [
+        2
+      ],
+      "new": true,
+      "suppressed": false
+    },
+    {
+      "fingerprint": "61d2fc2f765fc8b6ad16580161fc680f936976a23fe1fa9535eeede2027f647b",
+      "producer": "shellcheck",
+      "producer_version": "0.11.0",
+      "rule_pack": "crab-shellcheck-v1",
+      "module": "Claws",
+      "category": "sast",
+      "kind": "vulnerability",
+      "rule": "SC2086",
+      "severity": "info",
+      "original_severity": "info",
+      "message": "Review shellcheck rule SC2086 at the reported location.",
+      "path": "scripts/deploy.sh",
+      "line": 8,
+      "end_line": 8,
+      "column": 6,
+      "end_column": 11,
+      "help_uri": "https://www.shellcheck.net/wiki/SC2086",
+      "inputs": [
+        9
+      ],
+      "new": false,
+      "suppressed": true,
+      "exception": {
+        "status": "accepted",
+        "reason": "Word splitting is intended for the flag list.",
+        "reviewer": "security-team",
+        "expires": "2027-03-31",
+        "ticket": "SEC-42"
+      }
+    },
+    {
+      "fingerprint": "d390dccda9038f9dab0ab8919c70fc384a210294263aac361b597fb85bb032a9",
+      "producer": "checkov",
+      "producer_version": "3.2.495",
+      "rule_pack": "checkov-default",
+      "module": "Burrow",
+      "category": "iac",
+      "kind": "vulnerability",
+      "rule": "CKV_AWS_24",
+      "severity": "unknown",
+      "original_severity": "unknown",
+      "message": "Review checkov rule CKV_AWS_24 at the reported location.",
+      "path": "infra/main.tf",
+      "line": 1,
+      "end_line": 9,
+      "resource": "aws_security_group.demo",
+      "framework": "terraform",
+      "help_uri": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-1-port-security",
+      "inputs": [
+        6
+      ],
+      "new": false,
+      "suppressed": false
+    }
+  ],
+  "groups": [
+    {
+      "id": "a898ec2587052b82eda9ab1370d0432bde171e7902c161120100ef9c01ecc906",
+      "observations": [
+        "6577deb6654b980be47988b075ee24e6ed782d740ac81a745021d91b7a1852fa",
+        "6f239ea985fb78b74f0e070c93f1740465f6b3fd4c135b359b7a7e778e5d5e9b"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "4e4e74279ec774a06409f9e7b2f658f29ef4a259dd65a76d773d0a0513c3f772",
+      "observations": [
+        "9ff6cbee0ed3bf31ff19e89d812756371bf6cc184aff9da64f471a04b106d71d"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "critical"
+    },
+    {
+      "id": "6f8dceb63cefdfc09a3bb393c9fc4b061895aec8a552cfa89f4edbcf81bb2274",
+      "observations": [
+        "e62f4fdbe746d4523d25c85013967ec993a3e20963707685dab24729f549bd68"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "critical"
+    },
+    {
+      "id": "5aae2764ad66b5d649dbfbf8d86c716d9fd89b26b783d8261b723747902fa55f",
+      "observations": [
+        "bb34c91a943fabb96d2a8d942222427e1d469e7303b814ebd364a77bd8f00f14"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "critical"
+    },
+    {
+      "id": "6b2aa6b84bfc059446fa429be35f3b4d53bfb65804044f36d557a1e483fa9f1d",
+      "observations": [
+        "b528b5d59cd8c9b793fde54bc99de513e160ab2afc40a8cec52d6b0bc908d1f5"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "high"
+    },
+    {
+      "id": "8ecfd74c0ee037a7c8c445cebb0e6d7e5c349516eeeefef814e5622ea3eedbe0",
+      "observations": [
+        "899da53e0c8461c077337d6c104ae121649d7d4d39ed8b3ad092ed5265fb521f"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "high",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "7f55ff7f54142888068c53e030c41cc5fd8ec167c2299b9c495f8ed34fba9e64",
+      "observations": [
+        "4bd3db4c8425e7b6bcadef2a85206a75e14c3f26e0c68ac3e0ee046fd560e2fc"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "high"
+    },
+    {
+      "id": "55293c88a07a4c46127b0cf8a7efed38eb8c129dac22f9f36896824d62a62a2c",
+      "observations": [
+        "71474e14aed5e75184570d0d777afd19ddc2724d86395145881c9aa6946add1e"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "65ed61248d3093616589a156a40e359547f19fcaace701f870b7deb262a7fc1b",
+      "observations": [
+        "410d8ae370a4a68e0e4b2175691a010bba9f6c4b1c49c35bc77b999cf7504a1d"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "f9593eef0b2ad95cd28f5500de3e882dd5517205cee0b96ada243e2e2675dbf5",
+      "observations": [
+        "61d2fc2f765fc8b6ad16580161fc680f936976a23fe1fa9535eeede2027f647b"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "info"
+    },
+    {
+      "id": "a2923a1215a7269f1c60f46ca0d11ddaf136523d7a6fa2ac3612e08f2b636f07",
+      "observations": [
+        "d390dccda9038f9dab0ab8919c70fc384a210294263aac361b597fb85bb032a9"
+      ],
+      "revision": "4f1c2e9",
+      "mapping_version": 1,
+      "severity": "unknown"
+    }
+  ],
+  "inventory": {
+    "format": "cyclonedx",
+    "spec_version": "1.6",
+    "components": [
+      {
+        "name": "widget",
+        "version": "1.0.0",
+        "purl": "pkg:npm/widget@1.0.0",
+        "licenses": [
+          "MIT"
+        ],
+        "direct": true,
+        "observations": [
+          "e62f4fdbe746d4523d25c85013967ec993a3e20963707685dab24729f549bd68"
+        ]
+      },
+      {
+        "name": "evil-pkg",
+        "version": "6.6.6",
+        "purl": "pkg:npm/evil-pkg@6.6.6",
+        "licenses": [],
+        "direct": false,
+        "observations": [
+          "bb34c91a943fabb96d2a8d942222427e1d469e7303b814ebd364a77bd8f00f14"
+        ]
+      },
+      {
+        "name": "agpl-lib",
+        "version": "2.0.0",
+        "purl": "pkg:npm/agpl-lib@2.0.0",
+        "licenses": [
+          "AGPL-3.0-only"
+        ],
+        "direct": true,
+        "observations": [
+          "b528b5d59cd8c9b793fde54bc99de513e160ab2afc40a8cec52d6b0bc908d1f5"
+        ]
+      },
+      {
+        "name": "left-pad",
+        "version": "1.3.0",
+        "purl": "pkg:npm/left-pad@1.3.0",
+        "licenses": [
+          "WTFPL"
+        ],
+        "direct": null,
+        "observations": []
+      }
+    ]
+  },
+  "comparison": {
+    "base_revision": "9b8a7c6",
+    "new": 4,
+    "unchanged": 8,
+    "fixed": [
+      {
+        "fingerprint": "5f2dd19f25c48a3c6a244e73f1bb7002313311118611a9d6a33db77045fda607",
+        "producer": "bandit",
+        "rule": "B602",
+        "severity": "high",
+        "category": "sast",
+        "path": "src/legacy.py",
+        "line": 18
+      }
+    ]
+  },
+  "policy": {
+    "passed": false,
+    "source": "policy-file",
+    "minimum_severity": "high",
+    "new_only": false,
+    "include_review": true,
+    "actionable": 6,
+    "suppressed": 2,
+    "disabled_findings": 0,
+    "violations": [
+      {
+        "gate": "severity",
+        "count": 6
+      },
+      {
+        "gate": "secrets",
+        "count": 1
+      },
+      {
+        "gate": "malicious",
+        "count": 1
+      },
+      {
+        "gate": "kev",
+        "count": 1
+      },
+      {
+        "gate": "licenses",
+        "count": 1
+      }
+    ],
+    "expired_exceptions": [],
+    "stale_exceptions": [
+      "bc4f2b20da14ea438eced4c475b155812fe9dfe16f849eba7c632ec53b0de43a"
+    ]
+  },
+  "errors": []
+}

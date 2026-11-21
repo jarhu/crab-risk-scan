@@ -1,0 +1,108 @@
+# CRAB self-hosted deployment: API with WebUI, scan workers and optional PostgreSQL.
+#
+#   docker compose up -d --build                      # SQLite in the crab-data volume
+#   docker compose --profile postgres up -d --build   # with PostgreSQL (set CRAB_DATABASE_URL, see docs/server.md)
+#
+# Workers need a worker token. Create one once, put it in .env as CRAB_WORKER_TOKEN, then start the workers:
+#
+#   docker compose exec api crab-risk-scan admin create-token compose-workers --scope worker
+#
+# See docs/server.md for configuration, backups and security notes.
+
+name: crab
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: deployments/docker/server.Dockerfile
+    image: crab-risk-scan-server:local
+    restart: unless-stopped
+    environment:
+      CRAB_DATABASE_URL: ${CRAB_DATABASE_URL:-}
+      CRAB_SCAN_ROOTS: /scan
+      CRAB_ADMIN_USERNAME: ${CRAB_ADMIN_USERNAME:-admin}
+      CRAB_ADMIN_PASSWORD: ${CRAB_ADMIN_PASSWORD:-}
+      CRAB_SESSION_HOURS: ${CRAB_SESSION_HOURS:-12}
+      # Comma-separated host or host:port allowed for git sources. Empty rejects git sources.
+      CRAB_GIT_HOSTS: ${CRAB_GIT_HOSTS:-}
+      # Failed logins per client address in a lockout window. 0 disables the per-client limit.
+      CRAB_LOGIN_MAX_FAILURES_PER_CLIENT: ${CRAB_LOGIN_MAX_FAILURES_PER_CLIENT:-100}
+      # Behind a reverse proxy, also trust it, for example with FORWARDED_ALLOW_IPS=<proxy address>;
+      # otherwise all clients share one login bucket.
+    ports:
+      - "${CRAB_BIND:-127.0.0.1}:${CRAB_PORT:-8080}:8080"
+    volumes:
+      - crab-data:/var/lib/crab
+      - ${CRAB_SCAN_DIR:-./scan}:/scan:ro
+    networks:
+      - frontend
+      - workers
+      - database
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  worker:
+    build:
+      context: .
+      dockerfile: deployments/docker/scanner.Dockerfile
+    image: crab-risk-scan:local
+    restart: unless-stopped
+    command: ["worker", "--server", "http://api:8080", "--scan-root", "/scan"]
+    environment:
+      CRAB_WORKER_TOKEN: ${CRAB_WORKER_TOKEN:-}
+      # Workers allow the same git hosts by default (worker --git-host).
+      CRAB_GIT_HOSTS: ${CRAB_GIT_HOSTS:-}
+    volumes:
+      - ${CRAB_SCAN_DIR:-./scan}:/scan:ro
+      - crab-cache:/opt/crab/cache
+    tmpfs:
+      - /tmp:size=2g
+    networks:
+      - workers
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      replicas: ${CRAB_WORKERS:-1}
+
+  db:
+    image: postgres:17-alpine@sha256:526f86d93c6ea08fd3f1fe5605650cacc781b2c6013169a0ad8f42c7d3d84f32
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: crab
+      POSTGRES_USER: crab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - crab-postgres:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crab -d crab"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  frontend: {}
+  # Internal networks have no route outside Docker: workers reach only the API, and only the API reaches the database.
+  workers:
+    internal: true
+  database:
+    internal: true
+
+volumes:
+  crab-data: {}
+  crab-cache: {}
+  crab-postgres: {}

@@ -1,0 +1,212 @@
+name: CRAB risk scan
+description: Scan the checkout with the CRAB scanner image, publish SARIF and enforce the CRAB policy.
+author: CRAB
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: Directory to scan, relative to the workspace.
+    default: "."
+  engines:
+    description: Engine selection (auto, all, none or a comma-separated list).
+    default: auto
+  fail-on:
+    description: Minimum failing severity (critical, high, medium, low, info, unknown or none). Overrides the policy file.
+    default: ""
+  policy:
+    description: Policy v1 file, relative to the workspace.
+    default: ""
+  exceptions:
+    description: Exceptions v2 file, relative to the workspace.
+    default: ""
+  new-since:
+    description: Baseline schema-3 report for new and fixed findings, relative to the workspace.
+    default: ""
+  sbom:
+    description: Generate a CycloneDX SBOM with Syft (true or false).
+    default: "false"
+  annotations:
+    description: Maximum number of unsuppressed findings shown as annotations.
+    default: "50"
+  no-fail:
+    description: Pass the step when the policy fails (true or false). Incomplete scans still fail.
+    default: "false"
+  output-dir:
+    description: Results folder. Defaults to crab-results in the runner temporary directory.
+    default: ""
+  cache-dir:
+    description: Directory with offline Trivy and OSV databases, outside the workspace (CRAB refuses a cache inside the scanned tree). Relative paths resolve against the runner temporary directory. Defaults to crab-cache there; the image's own cache is not used because the container runs under the runner's uid. Restore it with actions/cache.
+    default: ""
+  update-db:
+    description: Run `crab-risk-scan db update` into cache-dir before the scan (true or false). This step uses the network.
+    default: "false"
+  upload-sarif:
+    description: Upload report.sarif to GitHub code scanning (needs security-events write permission).
+    default: "true"
+  sarif-category:
+    description: Code scanning category for the SARIF upload.
+    default: crab-risk-scan
+  artifact-name:
+    description: Workflow artifact name for the results folder. Empty disables the artifact upload.
+    default: crab-results
+  server-url:
+    description: CRAB server base URL for connected mode. Empty keeps the scan offline (the container gets no network).
+    default: ""
+  project:
+    description: CRAB server project key for connected mode.
+    default: ""
+  token:
+    description: CRAB API token with the scan:upload scope. Pass it from a secret.
+    default: ""
+  require-upload:
+    description: Fail when the upload to the CRAB server fails (true or false).
+    default: "false"
+  image:
+    description: Scanner image repository.
+    default: ghcr.io/jarhu/crab-risk-scan
+  image-tag:
+    description: Scanner image tag, optionally with a digest (TAG@sha256:DIGEST). Defaults to this release's version (crab_risk_scan.__version__). Pin a digest for immutable runs.
+    default: "0.3.0"
+  args:
+    description: Extra arguments for `crab-risk-scan ci`, separated by spaces.
+    default: ""
+
+outputs:
+  exit-code:
+    description: Runner exit status (0 passed, 1 policy failed, 2 incomplete).
+    value: ${{ steps.scan.outputs.status }}
+  passed:
+    description: Whether the policy passed (true or false).
+    value: ${{ steps.scan.outputs.passed }}
+  actionable:
+    description: Unsuppressed findings that fail the severity threshold.
+    value: ${{ steps.scan.outputs.actionable }}
+  results-dir:
+    description: Absolute path of the results folder.
+    value: ${{ steps.scan.outputs.results-dir }}
+  json:
+    description: Absolute path of report.json.
+    value: ${{ steps.scan.outputs.json }}
+  sarif:
+    description: Absolute path of report.sarif.
+    value: ${{ steps.scan.outputs.sarif }}
+  markdown:
+    description: Absolute path of report.md.
+    value: ${{ steps.scan.outputs.markdown }}
+  scan-url:
+    description: Scan page on the CRAB server after a successful upload.
+    value: ${{ steps.scan.outputs.scan-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run the CRAB scanner image
+      id: scan
+      shell: bash
+      env:
+        CRAB_TOKEN: ${{ inputs.token }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_ENGINES: ${{ inputs.engines }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_POLICY: ${{ inputs.policy }}
+        INPUT_EXCEPTIONS: ${{ inputs.exceptions }}
+        INPUT_NEW_SINCE: ${{ inputs.new-since }}
+        INPUT_SBOM: ${{ inputs.sbom }}
+        INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        INPUT_NO_FAIL: ${{ inputs.no-fail }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        INPUT_CACHE_DIR: ${{ inputs.cache-dir }}
+        INPUT_UPDATE_DB: ${{ inputs.update-db }}
+        INPUT_SERVER_URL: ${{ inputs.server-url }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_REQUIRE_UPLOAD: ${{ inputs.require-upload }}
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_IMAGE_TAG: ${{ inputs.image-tag }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        absolute() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$GITHUB_WORKSPACE" "$1" ;; esac; }
+
+        tag="$INPUT_IMAGE_TAG"
+        if ! printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(@sha256:[0-9a-f]{64})?$'; then
+          echo "::error title=Invalid image-tag::expected TAG or TAG@sha256:DIGEST"
+          exit 2
+        fi
+        image="$INPUT_IMAGE:$tag"
+
+        out="$(absolute "${INPUT_OUTPUT_DIR:-$RUNNER_TEMP/crab-results}")"
+        mkdir -p "$out"
+        cache="${INPUT_CACHE_DIR:-crab-cache}"
+        case "$cache" in /*) ;; *) cache="$RUNNER_TEMP/$cache" ;; esac
+        mkdir -p "$cache"
+        touch "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY"
+
+        # The container runs as the runner user so results stay writable on the host. Paths keep
+        # their host locations so every reported path stays valid. The workspace is read-only; only
+        # the results folder, the database cache and the two workflow command files are writable.
+        docker_args=(--rm --user "$(id -u):$(id -g)" -e HOME=/tmp --cap-drop ALL --security-opt no-new-privileges
+          -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$out:$out" -v "$cache:$cache"
+          -v "$GITHUB_OUTPUT:$GITHUB_OUTPUT" -v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY"
+          -w "$GITHUB_WORKSPACE")
+        for name in GITHUB_ACTIONS GITHUB_SHA GITHUB_REF GITHUB_REF_NAME GITHUB_REF_TYPE GITHUB_HEAD_REF \
+                    GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_WORKSPACE \
+                    GITHUB_STEP_SUMMARY GITHUB_OUTPUT; do
+          docker_args+=(-e "$name")
+        done
+
+        scan_args=(ci "$INPUT_PATH" --output-dir "$out" --engines "$INPUT_ENGINES" --annotations "$INPUT_ANNOTATIONS"
+          --cache-dir "$cache")
+        if [ "$INPUT_UPDATE_DB" = "true" ]; then
+          docker run "${docker_args[@]}" "$image" db update --cache-dir "$cache" "$INPUT_PATH"
+        fi
+        [ -n "$INPUT_FAIL_ON" ] && scan_args+=(--fail-on "$INPUT_FAIL_ON")
+        [ -n "$INPUT_POLICY" ] && scan_args+=(--policy "$INPUT_POLICY")
+        [ -n "$INPUT_EXCEPTIONS" ] && scan_args+=(--exceptions "$INPUT_EXCEPTIONS")
+        [ -n "$INPUT_NEW_SINCE" ] && scan_args+=(--new-since "$INPUT_NEW_SINCE")
+        [ "$INPUT_SBOM" = "true" ] && scan_args+=(--sbom)
+        [ "$INPUT_NO_FAIL" = "true" ] && scan_args+=(--no-fail)
+        if [ -n "$INPUT_SERVER_URL" ]; then
+          scan_args+=(--server "$INPUT_SERVER_URL" --project "$INPUT_PROJECT")
+          [ "$INPUT_REQUIRE_UPLOAD" = "true" ] && scan_args+=(--require-upload)
+          docker_args+=(-e CRAB_TOKEN)
+        else
+          # Offline scan: the engines get no network at all.
+          docker_args+=(--network none)
+        fi
+        if [ -n "$INPUT_ARGS" ]; then
+          read -r -a extra <<< "$INPUT_ARGS"
+          scan_args+=("${extra[@]}")
+        fi
+
+        status=0
+        docker run "${docker_args[@]}" "$image" "${scan_args[@]}" || status=$?
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.scan.outputs.sarif != '' }}
+      uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}
+        category: ${{ inputs.sarif-category }}
+
+    - name: Upload the results folder
+      if: ${{ always() && inputs.artifact-name != '' && steps.scan.outputs.results-dir != '' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.scan.outputs.results-dir }}
+        if-no-files-found: error
+
+    - name: Enforce the CRAB policy
+      if: ${{ always() }}
+      shell: bash
+      env:
+        STATUS: ${{ steps.scan.outputs.status }}
+      run: |
+        case "${STATUS:-2}" in
+          0) echo "CRAB policy passed." ;;
+          1) echo "CRAB policy failed. See the job summary and annotations."; exit 1 ;;
+          *) echo "CRAB scan incomplete (exit ${STATUS:-2}). See the job log and crab-run.json."; exit 2 ;;
+        esac
