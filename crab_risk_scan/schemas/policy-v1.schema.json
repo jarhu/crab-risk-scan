@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jarhu/crab-risk-scan/schemas/policy-v1.schema.json",
+  "title": "CRAB policy, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {"const": 1},
+    "fail_on": {"anyOf": [{"$ref": "#/$defs/level"}, {"const": "none"}]},
+    "new_only": {"type": "boolean"},
+    "include_review": {"type": "boolean"},
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secrets": {"type": "boolean"},
+        "malicious": {"type": "boolean"},
+        "kev": {"type": "boolean"},
+        "epss": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"const": false}, {"type": "null"}]},
+        "licenses": {"type": "boolean"},
+        "max": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/level"},
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {"type": "array", "items": {"$ref": "#/$defs/ruleKey"}},
+        "severity": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/ruleKey"},
+          "additionalProperties": {"$ref": "#/$defs/level"}
+        }
+      }
+    },
+    "licenses": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deny": {"type": "array", "items": {"$ref": "#/$defs/license"}},
+        "allow": {"type": "array", "items": {"$ref": "#/$defs/license"}},
+        "severity": {"$ref": "#/$defs/level"}
+      }
+    }
+  },
+  "$defs": {
+    "level": {"enum": ["critical", "high", "medium", "low", "info", "unknown"]},
+    "ruleKey": {"type": "string", "pattern": "^[\\w@.+:~^!-]{1,256}/[\\w@.+:/~^!-]{1,256}(?!\\n)$"},
+    "license": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^\\S(.*\\S)?(?!\\n)$"}
+  }
+}

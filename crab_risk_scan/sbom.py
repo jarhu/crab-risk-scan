@@ -1,46 +1,99 @@
-"""Generate a CycloneDX inventory using a separately installed Syft binary."""
+"""Generate CycloneDX and SPDX inventories with one run of a separately installed Syft binary."""
 import json
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 
+from . import engines
 
-def generate(directory, executable=None):
+SBOM_FORMATS = ("cyclonedx-json", "spdx-json")
+LIMIT = 32 * 1024 * 1024
+FILE_NAMES = {"cyclonedx-json": "inventory.cdx.json", "spdx-json": "inventory.spdx.json"}
+
+
+class SbomError(Exception):
+    """SBOM generation failed. `reason` is a stable identifier safe for reports."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _validate(fmt, document):
+    if fmt == "cyclonedx-json":
+        valid = (isinstance(document, dict) and document.get("bomFormat") == "CycloneDX"
+                 and isinstance(document.get("specVersion"), str)
+                 and isinstance(document.get("components", []), list))
+    else:
+        valid = (isinstance(document, dict) and isinstance(document.get("spdxVersion"), str)
+                 and document["spdxVersion"].startswith("SPDX-")
+                 and isinstance(document.get("packages", []), list))
+    if not valid:
+        raise SbomError("sbom_invalid", f"Syft returned an invalid {fmt} document")
+    return document
+
+
+def relativize(value, target):
+    """Replace the scanned directory's absolute path with "/" in every string.
+
+    Syft names file components by their absolute host path. Afterwards they match the
+    source-relative `syft:location` values and the host layout stays out of the inventory.
+    """
+    prefixes = sorted({str(target), Path(target).as_posix()}, key=len, reverse=True)
+
+    def clean(item):
+        if isinstance(item, str):
+            for prefix in prefixes:
+                if item == prefix:
+                    return "/"
+                for separator in ("/", "\\"):
+                    item = item.replace(prefix + separator, "/")
+            return item
+        if isinstance(item, list):
+            return [clean(entry) for entry in item]
+        if isinstance(item, dict):
+            return {key: clean(entry) for key, entry in item.items()}
+        return item
+
+    return clean(value)
+
+
+def generate(directory, executable=None, formats=("cyclonedx-json",), *, timeout=900, revision=None):
+    """Return {format: document} for every requested format from a single Syft run."""
+    formats = sorted(set(formats))
+    if not formats or any(fmt not in SBOM_FORMATS for fmt in formats):
+        raise SbomError("sbom_format", "unsupported SBOM format")
+    directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
-        raise ValueError("expected a repository directory")
+        raise SbomError("expected_directory", "expected a repository directory")
     target = directory.resolve()
-    # Only search absolute PATH entries. Never pick a binary in the scanned tree.
-    search = [p for p in os.get_exec_path() if Path(p).is_absolute()]
-    if executable is None:
-        name = "syft.exe" if os.name == "nt" else "syft"
-        executable = next((Path(p) / name for p in search if
-                           (Path(p) / name).is_file() and os.access(Path(p) / name, os.X_OK)
-                           and not (Path(p) / name).resolve().is_relative_to(target)), None)
-    if executable is None:
-        raise ValueError("install Syft or pass --syft with its absolute path")
-    binary = Path(executable)
-    if not binary.is_absolute() or not binary.is_file() or binary.resolve().is_relative_to(target):
-        raise ValueError("use a trusted Syft executable outside the scanned directory")
-    binary = binary.resolve()
-    # A private working directory prevents loading the target's local .syft.yaml.
-    with tempfile.TemporaryDirectory() as scratch:
-        output = Path(scratch) / "inventory.json"
-        env = {key: value for key, value in os.environ.items()
-               if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TMP", "TEMP", "TMPDIR", "LANG"}}
-        env.update({"HOME": scratch, "USERPROFILE": scratch, "XDG_CONFIG_HOME": scratch,
-                    "SYFT_CHECK_FOR_APP_UPDATE": "false"})
-        subprocess.run([str(binary), "scan", "dir:" + str(target), "-o",
-                        "cyclonedx-json=" + str(output)], check=True, timeout=180,
-                       cwd=scratch, env=env, stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        with output.open("rb") as stream:
-            data = stream.read(32 * 1024 * 1024 + 1)
-        if len(data) > 32 * 1024 * 1024:
-            raise ValueError("SBOM exceeds the 32 MiB output limit")
-        bom = json.loads(data)
-        if (not isinstance(bom, dict) or bom.get("bomFormat") != "CycloneDX"
-                or not isinstance(bom.get("specVersion"), str)
-                or not isinstance(bom.get("components", []), list)):
-            raise ValueError("Syft returned an invalid CycloneDX document")
-        return bom
+    binary, reason = engines.discover("syft", Path(executable) if executable else None, target)
+    if binary is None:
+        raise SbomError("sbom_" + reason, "install Syft (crab-risk-scan engines install) or pass a trusted "
+                                          "absolute Syft path outside the scanned directory")
+    with engines.private_workspace(target) as work:
+        command = [str(binary), "scan", "dir:" + str(target), "--quiet", "--source-name", target.name]
+        if revision:
+            command += ["--source-version", revision]
+        outputs = {fmt: work.output / FILE_NAMES[fmt] for fmt in formats}
+        for fmt, path in outputs.items():
+            command += ["-o", f"{fmt}={path}"]
+        # The private working directory and HOME keep the target's .syft.yaml out of the run.
+        outcome = engines.run_isolated(command, work, timeout=timeout,
+                                       env={"SYFT_CHECK_FOR_APP_UPDATE": "false"})
+        if outcome.timed_out:
+            raise SbomError("sbom_timeout", "Syft exceeded the engine timeout")
+        if outcome.returncode != 0:
+            raise SbomError("sbom_failed", f"Syft exited with status {outcome.returncode}")
+        documents = {}
+        for fmt, path in outputs.items():
+            try:
+                with path.open("rb") as stream:
+                    data = stream.read(LIMIT + 1)
+            except OSError:
+                raise SbomError("sbom_failed", f"Syft wrote no {fmt} document") from None
+            if len(data) > LIMIT:
+                raise SbomError("sbom_size_limit", "SBOM exceeds the 32 MiB output limit")
+            try:
+                documents[fmt] = relativize(_validate(fmt, json.loads(data)), target)
+            except (ValueError, RecursionError):
+                raise SbomError("sbom_invalid", f"Syft returned an invalid {fmt} document") from None
+        return documents

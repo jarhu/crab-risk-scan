@@ -1,53 +1,70 @@
 # CRAB architecture
 
-CRAB processes one local repository snapshot per invocation. Pinch parses eligible source files. Broad detection stays with established scanner engines. Their saved reports meet at a versioned adapter boundary. Syft generates a separate CycloneDX inventory.
+CRAB processes one local repository snapshot per scan. The same core serves three interfaces: the `scan` command, the `ci` runner and the self-hosted server with its workers. The core uses only the Python standard library. It never depends on the WebUI, an external API or a database.
 
 ```mermaid
 flowchart TD
-  S["Repository snapshot"] --> P["Pinch rules"]
-  S --> E["External scanners"]
+  S["Repository snapshot"] --> P["Pinch built-in rules"]
+  S --> E["Pinned engines in restricted subprocesses"]
+  R["Saved reports and run manifests"] --> A
+  E --> A["Native JSON and SARIF adapters"]
   S --> Y["Syft catalogers"]
-  E --> A["Native JSON adapters"]
   P --> O["Normalized observations"]
   A --> O
   O --> G["Correlation groups"]
   Y --> B["CycloneDX inventory"]
-  B --> J["Package links"]
+  B --> J["Package links and license policy"]
   O --> J
-  O --> T["Threshold and baseline"]
-  G --> R["Crab Trap JSON"]
-  J --> R
-  T --> R
-  T --> F["SARIF and CI status"]
+  O --> X["EPSS and KEV enrichment"]
+  O --> C["Comparison with a base report"]
+  O --> T["Policy: rules, exceptions, gates"]
+  G --> RPT["Schema 3 report"]
+  J --> RPT
+  X --> RPT
+  C --> RPT
+  T --> RPT
+  RPT --> OUT["JSON, SARIF, Markdown, HTML, CSV, DOCX, Code Quality, VEX"]
 ```
+
+## Execution modes
+
+| Mode | Entry point | Output |
+|---|---|---|
+| CLI | `crab-risk-scan scan DIRECTORY` | Report files or stdout, exit status from the policy |
+| Runner | `crab-risk-scan ci DIRECTORY` | Artifact folder, CI summary and annotations, optional upload to a server |
+| Server | `crab-risk-scan serve` and `crab-risk-scan worker` | REST API, WebUI, scan history, triage, jobs, schedules and dashboards |
+
+Workers run the `scan` command in a subprocess, so every mode produces the same report for the same inputs.
 
 ## Discovery and execution
 
-The original `scan` command emits schema 1 and retains its Python and Dockerfile behavior. `collect` runs those checks plus its HTML, PostgreSQL and Mojo dispatch and emits an additive schema 2 report. Missing optional parsers and unparseable files count as coverage errors. Each successful source file contributes once to `files_scanned`. Report imports are accounted for separately.
+Built-in checks read regular UTF-8 files of up to 1 MiB and skip symlinks and common generated directories. Missing optional parsers and unparseable files count as coverage errors.
 
-Built-in checks read regular UTF-8 files of up to 1 MiB and skip symlinks and common generated directories. SQLFluff receives SQL text with a fixed PostgreSQL dialect. The Mojo parser loads an explicitly supplied native grammar from outside the target checkout. The CLI never compiles target code. Run the installed CLI outside the target, and run external scanners with trusted settings in an isolated worker. Use a stable read-only snapshot, resource limits and a network policy appropriate for that worker.
+`--engines auto` runs each installed engine whose file types are present and records the others as skipped. `--engines all` treats a missing engine as a failure. Engines are found through `--engine-path`, then `CRAB_ENGINE_DIR`, then absolute `PATH` entries. An executable inside the scanned directory is always rejected. Each engine runs with a restricted environment, a private working directory and home, closed standard input, a timeout and, on POSIX, resource limits. Engines write their reports to a private directory outside the target. Offline flags are the default. `crab-risk-scan db update` is the only command that fetches vulnerability databases. Containers add network isolation.
 
-The Syft subprocess uses an explicit directory source, a temporary working directory, a restricted environment and a 180-second timeout. CRAB checks the CycloneDX envelope and replaces an output file only after generation succeeds. Its generated or imported inventory limit is 32 MiB. Normal report imports are bounded at 16 MiB each.
+`crab-risk-scan engines install` downloads the versions pinned in `crab_risk_scan/engines.lock.json` and verifies each SHA-256 digest before use. Saved reports enter through the same adapters as engine output. They are bounded at 16 MiB each, and inventories at 32 MiB.
 
 ## Observations, groups and inventory
 
 | Entity | Identity and purpose |
 |---|---|
-| Import | Ordinal, producer, version, rule pack and status. Direct imports can lack upstream metadata. A run manifest supplies the revision, versions, rule packs and process completion status. |
-| Observation | Producer, rule/advisory, normalized and original severity, location, fingerprint and curated message. Available evidence includes source extent, Bandit confidence, Checkov resource, package metadata or image manifest digest. |
-| Group | A list of observation fingerprints, revision, mapping version and highest recorded severity. A singleton is valid. |
-| Component | A cataloged component in the supplied CycloneDX inventory. Links use the exact package URL and installed version. Each side can contain unmatched records. |
+| Import | Ordinal, producer, origin (engine, report or manifest), version, rule pack and status. Skipped and failed entries carry a reason. |
+| Observation | Producer, rule or advisory, category, kind, normalized and original severity, location and a line-independent fingerprint. Optional evidence includes CWE, CVSS, fixed version, risk type, EPSS, KEV, package, image digest and help URI. |
+| Group | Observation fingerprints, revision, mapping version and highest severity |
+| Component | A CycloneDX component with licenses, direct-dependency status and linked observations |
 
-Exact duplicates within a producer share an observation. Import indices retain their provenance. Ranking uses severity first and stable identity fields for tie-breaking. When duplicate severities disagree, the highest severity takes precedence. Rule equivalence map v1 connects CRAB-PY-001 and Bandit B323 only when both reports describe the same file and complete byte extent. Colocated findings with different spans remain independent.
+Source fingerprints hash the producer, rule, path, the whitespace-normalized content of the flagged lines, an occurrence index and a stable identity. Inserting unrelated lines therefore keeps fingerprints and their exceptions. Credential fingerprints (secret findings and hard-coded password rules) keep only a 16-bit tag of that content: a changed secret gets a new fingerprint, but the tag cannot confirm a guessed secret. Dependency fingerprints use the package, advisory, manifest and image scope. Report-supplied paths are checked lexically and never resolved, so a UNC path in an imported report cannot make the host contact another machine.
 
-Dependency grouping requires the same versioned package URL, installed version and artifact scope. Within that scope, equal advisory IDs and explicit OSV aliases connect transitively. CRAB derives URLs for familiar package ecosystems when the scanner omitted one. Unknown ecosystems need an explicit URL for correlation. Filesystem findings are scoped to their manifest. Image findings include a validated sha256 digest, and image-internal locations never become checkout annotations. The optional repository SBOM joins repository findings only.
+Exact duplicates within a producer share an observation. Rule equivalence maps connect findings from different producers only when they describe the same file and complete byte extent. Dependency grouping requires the same canonical package URL, installed version and artifact scope. Equal advisory IDs and OSV aliases connect transitively within that scope. Image findings carry a validated sha256 digest and never become checkout annotations.
 
-The repository revision is caller-supplied. CRAB does not authenticate a report or attest the snapshot associated with a standalone SBOM. Generate and retain inputs together in CI. The mapping version and revision in each group make repeated comparisons interpretable.
+## Policy and reporting
 
-## Reporting and policy
+Policy evaluation runs in this order: rule profile (disabled rules, severity overrides), license findings from the inventory, exceptions, comparison with a base report, then gates. Gates cover the severity threshold, secrets, malicious packages, KEV, EPSS, licenses, per-severity counts and new findings only. Exceptions carry a status (accepted, false positive or not affected with a VEX justification), a reviewer, a reason, an optional ticket and an optional expiry. Expired exceptions stop suppressing. Unmatched exceptions are reported as stale.
 
-`collect --format sarif` exports SARIF 2.1.0 from observations, with repository-relative URI-encoded locations, available line ranges and stable partial fingerprints. Image-only findings retain their advisory and severity. The run invocation carries coverage failures. JSON additionally exposes groups, input provenance and inventory joins.
+Exit status 2 takes precedence when coverage is incomplete. Exit status 1 means the policy failed, and 0 means it passed within the measured coverage. Renderers turn one schema 3 report into every export format. See [reporting](reporting.md).
 
-Reviewed baseline entries target exact observation fingerprints and contain a reviewer and reason. Matching findings stay visible and are marked suppressed. Severity thresholds apply to remaining observations. Exit 2 has precedence over both findings and suppressions, exit 1 indicates actionable observations, and exit 0 indicates the specified policy passed within measured coverage.
+## Server
 
-[Native report formats and commands](integrations.md) · [Language coverage](coverage.md) · [SARIF specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+The server is an optional extra built on FastAPI and SQLAlchemy, with SQLite by default and PostgreSQL optional. It stores uploaded and worker-produced reports, findings, exceptions, jobs, schedules, users, memberships and API tokens. Administrators manage everything. Project maintainers triage, upload, run jobs and manage schedules, and viewers read. Workers lease jobs, send heartbeats and are requeued when a lease expires. A cron scheduler enqueues due scans with a compare-and-set, so several API instances never duplicate a run. See [server](server.md) and [API](api.md).
+
+[Roadmap](roadmap.md) · [Integrations](integrations.md) · [Reporting](reporting.md) · [CI](ci.md) · [Server](server.md) · [WebUI](webui.md) · [Language coverage](coverage.md) · [SARIF specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)

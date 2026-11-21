@@ -1,0 +1,33 @@
+# pre-commit hooks for CRAB. The hooks scan the whole working tree, not just the staged files,
+# because correlation, secrets and dependency checks need repository context.
+#
+#   repos:
+#     - repo: https://github.com/jarhu/crab-risk-scan
+#       rev: v0.3.0
+#       hooks:
+#         - id: crab-risk-scan
+#           args: [., --fail-on, high]
+
+- id: crab-risk-scan
+  name: CRAB risk scan
+  description: Scan the repository with CRAB using the engines installed on this machine.
+  entry: crab-risk-scan scan --format markdown
+  args: ["."]
+  language: python
+  minimum_pre_commit_version: "3.2.0"
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+  stages: [pre-commit, pre-push, manual]
+
+- id: crab-risk-scan-docker
+  name: CRAB risk scan (scanner image)
+  description: Scan the repository with the CRAB scanner image and its pinned engines.
+  entry: ghcr.io/jarhu/crab-risk-scan:0.3.0 scan --format markdown
+  args: ["."]
+  language: docker_image
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+  minimum_pre_commit_version: "3.2.0"
+  stages: [pre-commit, pre-push, manual]

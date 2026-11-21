@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jarhu/crab-risk-scan/schemas/run-manifest-v1.schema.json",
+  "title": "CRAB run manifest, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "revision", "reports"],
+  "properties": {
+    "version": {"const": 1},
+    "revision": {"$ref": "#/$defs/identifier"},
+    "reports": {"type": "array", "items": {"$ref": "#/$defs/report"}}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[\\w@.+:/~^!-]{1,256}(?!\\n)$"},
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "status"],
+      "properties": {
+        "producer": {"enum": ["bandit", "opengrep", "gitleaks", "checkov", "shellcheck", "psscriptanalyzer",
+                              "trivy", "trivy-image", "osv", "sarif"]},
+        "version": {"anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "rule_pack": {"anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "status": {"enum": ["complete", "partial", "failed", "skipped"]},
+        "reason": {"$ref": "#/$defs/identifier"},
+        "file": {"type": "string", "minLength": 1, "maxLength": 4096, "not": {"pattern": "(^|[\\\\/])\\.\\.([\\\\/]|$)"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"enum": ["complete", "partial"]}}},
+         "then": {"required": ["file"]}},
+        {"if": {"properties": {"status": {"enum": ["complete", "partial", "failed"]}}},
+         "then": {"required": ["version", "rule_pack"],
+                  "properties": {"version": {"$ref": "#/$defs/identifier"},
+                                 "rule_pack": {"$ref": "#/$defs/identifier"}}}}
+      ]
+    }
+  }
+}

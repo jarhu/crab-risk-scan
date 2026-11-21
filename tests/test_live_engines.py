@@ -1,16 +1,27 @@
-"""Run pinned upstream producers in CI and round-trip their native reports."""
+"""Run the pinned source engines through `scan` in CI.
+
+The CI job installs them with `crab-risk-scan engines install --dest DIR` and sets CRAB_ENGINE_DIR=DIR/bin.
+"""
 import json
 import os
-from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from test_reports import cli
 
 
-@unittest.skipUnless(os.getenv("CRAB_OPENGREP"), "requires the external engine job")
+def engine_run(test, target, engines, status, *extra):
+    run = cli("scan", target, "--engines", engines, *extra)
+    test.assertEqual(run.returncode, status, run.stderr + run.stdout[:3000])
+    report = json.loads(run.stdout)
+    for entry in report["imports"]:
+        test.assertEqual((entry["origin"], entry["status"]), ("engine", "complete"), entry)
+        test.assertIsNotNone(entry["producer_version"])
+    return report
+
+
+@unittest.skipUnless(os.getenv("CRAB_ENGINE_DIR"), "requires engines installed with `engines install`")
 class LiveEngineTests(unittest.TestCase):
     def test_opengrep_language_pack(self):
         files = {
@@ -29,31 +40,35 @@ class LiveEngineTests(unittest.TestCase):
             for name, (positive, clean) in files.items():
                 (target / name).write_text(positive)
                 (target / ("safe_" + name)).write_text(clean)
-            report = Path(tmp) / "engine.json"
-            subprocess.run([os.environ["CRAB_OPENGREP"], "scan", "--config", cli("rules").stdout.strip(),
-                            "--json", "--output", str(report), "--no-git-ignore", "."],
-                           cwd=target, check=True)
-            result = cli("collect", target, "--opengrep", report)
-            self.assertEqual(result.returncode, 1, result.stdout)
-            hits = json.loads(result.stdout)["findings"]
+            # Target-controlled ignore files must not hide results.
+            (target / ".semgrepignore").write_text("*\n")
+            (target / ".gitignore").write_text("*\n")
+            report = engine_run(self, target, "opengrep", 1)
+            self.assertEqual(report["imports"][0]["rule_pack"], "crab-opengrep-v1")
+            hits = report["findings"]
             self.assertEqual({hit["path"] for hit in hits}, set(files))
             self.assertEqual(len(hits), len(files))
+            self.assertTrue(all(hit["rule"].startswith("crab-") for hit in hits))
 
     def test_bandit_and_shellcheck(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "client.py").write_text("import ssl\nssl._create_unverified_context()\n")
+            (root / "client.py").write_text("import ssl\nssl._create_unverified_context()  # nosec\n")
             (root / "script.sh").write_text('#!/bin/bash\necho $HOME\necho "$HOME"\n')
-            raw = root / "bandit.json"
-            subprocess.run([sys.executable, "-m", "bandit", "-q", "--exit-zero", "-f", "json",
-                            "-o", str(raw), "client.py"], cwd=root, check=True)
-            check = subprocess.run(["shellcheck", "--format=json", "script.sh"], cwd=root,
-                                   capture_output=True)
-            self.assertEqual(check.returncode, 1)
-            shell = root / "shell.json"
-            shell.write_bytes(check.stdout)
-            run = cli("collect", root, "--bandit", raw, "--shellcheck", shell)
-            self.assertEqual(run.returncode, 1, run.stdout)
-            report = json.loads(run.stdout)
+            (root / ".shellcheckrc").write_text("disable=SC2086\n")
+            (root / ".bandit").write_text("[bandit]\nskips = B323\n")
+            report = engine_run(self, root, "bandit,shellcheck", 1)
             self.assertEqual({f["producer"] for f in report["findings"]}, {"crab", "shellcheck", "bandit"})
             self.assertIn(2, [len(g["observations"]) for g in report["groups"]])
+
+    def test_auto_records_every_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text("print('ok')\n")
+            run = cli("scan", root, "--engines", "auto")
+            report = json.loads(run.stdout)
+            statuses = {i["producer"]: (i["status"], i.get("reason")) for i in report["imports"]}
+            self.assertEqual(statuses["bandit"], ("complete", None))
+            self.assertEqual(statuses["shellcheck"], ("skipped", "not_applicable"))
+            self.assertEqual(statuses["trivy-image"], ("skipped", "not_applicable"))
+            self.assertTrue(all(i["origin"] == "engine" for i in report["imports"]))

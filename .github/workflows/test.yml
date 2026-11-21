@@ -3,87 +3,154 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  tests:
-    runs-on: ubuntu-latest
+  unit:
+    name: Unit tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ['3.10', '3.13']
+        include:
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: windows-latest
+            python: '3.13'
+          - os: macos-latest
+            python: '3.13'
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Build the pinned Mojo grammar for Pinch
-        uses: actions/checkout@v4
+      - run: python -m pip install '.[docx,server,dev]'
+      - run: python -m unittest discover -s tests -v
+
+  engines:
+    name: Live engines (Ubuntu, Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Check out the pinned Mojo grammar for Pinch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: HerringtonDarkholme/tree-sitter-mojo
           ref: 99fe918e69f087f910ef3b11eba31eb0d7e54edf
           path: .ci/mojo
           persist-credentials: false
-      - name: Install trusted parser dependencies
+      - name: Install CRAB and the trusted parser dependencies
         run: |
-          python -m pip install '.[pinch]'
+          python -m pip install '.[pinch,docx,server,dev]'
           cc -O2 -fPIC -I.ci/mojo/src -c .ci/mojo/src/parser.c -o "$RUNNER_TEMP/parser.o"
           c++ -O2 -fPIC -I.ci/mojo/src -c .ci/mojo/src/scanner.cc -o "$RUNNER_TEMP/scanner.o"
           c++ -shared "$RUNNER_TEMP/parser.o" "$RUNNER_TEMP/scanner.o" -o "$RUNNER_TEMP/mojo.so"
+          rm -rf .ci
           echo "CRAB_MOJO_GRAMMAR=$RUNNER_TEMP/mojo.so" >> "$GITHUB_ENV"
-      - name: Install pinned source engines
-        if: matrix.python == '3.13'
+      - name: Install the pinned engines with checksum verification
         run: |
-          python -m pip install bandit==1.8.6
-          curl --fail --location --retry 3 https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86 -o "$RUNNER_TEMP/opengrep"
-          echo "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0  $RUNNER_TEMP/opengrep" | sha256sum -c -
-          chmod +x "$RUNNER_TEMP/opengrep"
-          echo "CRAB_OPENGREP=$RUNNER_TEMP/opengrep" >> "$GITHUB_ENV"
-      - name: Install infrastructure and secrets engines in isolation
-        if: matrix.python == '3.10'
+          crab-risk-scan engines install --dest "$RUNNER_TEMP/engines"
+          echo "CRAB_ENGINE_DIR=$RUNNER_TEMP/engines/bin" >> "$GITHUB_ENV"
+          echo "CRAB_TEST_SYFT=$RUNNER_TEMP/engines/bin/syft" >> "$GITHUB_ENV"
+      - name: Prepare the offline vulnerability databases
         run: |
-          python -m venv "$RUNNER_TEMP/checkov"
-          "$RUNNER_TEMP/checkov/bin/pip" install --quiet checkov==3.2.495
-          echo "CRAB_CHECKOV=$RUNNER_TEMP/checkov/bin/checkov" >> "$GITHUB_ENV"
-          curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tar.gz"
-          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
-          tar xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
-          echo "CRAB_GITLEAKS=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
-          curl --fail --location --retry 3 https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg -o "$RUNNER_TEMP/pssa.zip"
-          mkdir -p "$HOME/.local/share/powershell/Modules/PSScriptAnalyzer/1.24.0"
-          unzip -oq "$RUNNER_TEMP/pssa.zip" -d "$HOME/.local/share/powershell/Modules/PSScriptAnalyzer/1.24.0"
-      - name: Install the Syft integration-test version
-        uses: anchore/sbom-action/download-syft@fbfd9c6c189226748411491745178e0c2017392d
-        id: syft
-        with:
-          syft-version: v1.32.0
+          crab-risk-scan db update --cache-dir "$RUNNER_TEMP/crab-cache"
+          echo "CRAB_CACHE_DIR=$RUNNER_TEMP/crab-cache" >> "$GITHUB_ENV"
+      - run: crab-risk-scan engines
       - run: python -m unittest discover -s tests -v
-        env:
-          CRAB_TEST_SYFT: ${{ steps.syft.outputs.cmd }}
-      - name: Generate example inventory with the installed CLI
-        if: matrix.python == '3.13'
-        env:
-          SYFT_BIN: ${{ steps.syft.outputs.cmd }}
+      - name: Generate the example inventory with the installed CLI
+        run: crab-risk-scan sbom examples/inventory --output "$RUNNER_TEMP/demo.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: example-cyclonedx-sbom
+          path: ${{ runner.temp }}/demo.cdx.json
+          if-no-files-found: error
+
+  web:
+    name: WebUI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  package:
+    name: Installed wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the WebUI into the package
+        working-directory: web
+        run: npm ci && npm run build
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Build the wheel and install it outside the checkout
         run: |
-          python -m pip install .
-          crab-risk-scan sbom examples/inventory --syft "$SYFT_BIN" --output demo.cdx.json
-      - name: Validate installed CLI output against the SARIF 2.1.0 schema
-        if: matrix.python == '3.13'
+          python -m pip install build==1.6.1
+          python -m build --wheel --outdir "$RUNNER_TEMP/dist"
+          python -m venv "$RUNNER_TEMP/venv"
+          wheel="$(ls "$RUNNER_TEMP"/dist/*.whl)"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "$wheel[server,docx]" jsonschema==4.26.0
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Validate installed CLI output against the SARIF 2.1.0 and report schemas
         working-directory: ${{ runner.temp }}
         run: |
-          python -m pip install --quiet jsonschema==4.25.1
           curl --fail --location --retry 3 https://raw.githubusercontent.com/oasis-tcs/sarif-spec/1742a253eb654bf8a4ed7c60eaef7412b2c23553/sarif-2.1/schema/sarif-schema-2.1.0.json -o sarif-schema.json
           test -f "$(crab-risk-scan rules)"
           status=0
-          crab-risk-scan collect "$GITHUB_WORKSPACE/examples/demo" --trivy "$GITHUB_WORKSPACE/examples/trivy-fs.json" --format sarif > demo.sarif || status=$?
+          crab-risk-scan scan "$GITHUB_WORKSPACE/examples/demo" --engines none --trivy "$GITHUB_WORKSPACE/examples/trivy-fs.json" \
+            --output demo.sarif --output demo.json --output demo.docx --output demo.html || status=$?
           test "$status" = 1
           python - <<'PY'
           import json
-          import jsonschema
+          from importlib.resources import files
           from pathlib import Path
-          report = json.loads(Path("demo.sarif").read_text())
-          jsonschema.validate(report, json.loads(Path("sarif-schema.json").read_text()))
-          assert len(report["runs"][0]["results"]) == 3
+          import jsonschema
+          sarif = json.loads(Path("demo.sarif").read_text())
+          jsonschema.validate(sarif, json.loads(Path("sarif-schema.json").read_text()))
+          assert len(sarif["runs"][0]["results"]) == 3
+          schema = json.loads(files("crab_risk_scan").joinpath("schemas/report-v3.schema.json").read_text())
+          jsonschema.Draft202012Validator(schema).validate(json.loads(Path("demo.json").read_text()))
+          assert Path("demo.docx").stat().st_size > 0 and Path("demo.html").stat().st_size > 0
           PY
-      - uses: actions/upload-artifact@v4
-        if: matrix.python == '3.13'
-        with:
-          name: example-cyclonedx-sbom
-          path: demo.cdx.json
-          if-no-files-found: error
+      - name: Serve the packaged WebUI and API from the installed wheel
+        working-directory: ${{ runner.temp }}
+        env:
+          CRAB_ADMIN_USERNAME: admin
+          CRAB_ADMIN_PASSWORD: ci-only-password-1
+        run: |
+          crab-risk-scan serve --data-dir "$RUNNER_TEMP/server-data" --port 8080 &
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8080/api/v1/health && break
+            sleep 1
+          done
+          curl --silent --fail http://127.0.0.1:8080/api/v1/health
+          curl --silent --fail http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          kill %1

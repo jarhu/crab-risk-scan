@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "engines": {
+    "opengrep": {
+      "version": "2.0.0",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86", "sha256": "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0", "format": "binary"},
+        "linux-aarch64": {"url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_aarch64", "sha256": "6257b65423a744b704af2ff9beeb8f222c2f6925236af386b56b031d4c06d6d8", "format": "binary"},
+        "darwin-x86_64": {"url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_x86", "sha256": "51d2f918d7aad0afc1426bb4fbf56e32fc70c3ffd5ddb78e32e7d61e51c029a2", "format": "binary"},
+        "darwin-arm64": {"url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_arm64", "sha256": "b51b3d83f165a2e0934497b8f1b08abb1c3041ef20ef911c97e04cb39af1ad55", "format": "binary"},
+        "windows-x86_64": {"url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_windows_x86.zip", "sha256": "899a17e2b15863367cfd15032c93cdf482fd4e7ec8719c69de46f4f38b227864", "format": "zip", "member": "opengrep.exe", "files": ["libgcc_s_seh-1.dll", "libgmp-10.dll", "libpcre2-8-0.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "libzstd-1.dll"]}
+      }
+    },
+    "bandit": {"version": "1.9.4", "install": "pip", "package": "bandit==1.9.4", "requirements": "bandit-requirements.txt"},
+    "gitleaks": {
+      "version": "8.28.0",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz", "sha256": "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb", "format": "tar.gz", "member": "gitleaks"},
+        "linux-aarch64": {"url": "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_arm64.tar.gz", "sha256": "eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356", "format": "tar.gz", "member": "gitleaks"},
+        "darwin-x86_64": {"url": "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_darwin_x64.tar.gz", "sha256": "edf5a507008b0d2ef4959575772772770586409c1f6f74dabf19cbe7ec341ced", "format": "tar.gz", "member": "gitleaks"},
+        "darwin-arm64": {"url": "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_darwin_arm64.tar.gz", "sha256": "d942f3ad147250c9edbaab3fed9e482f98d3b59ba10ae97b8d75647e3ade492c", "format": "tar.gz", "member": "gitleaks"},
+        "windows-x86_64": {"url": "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_windows_x64.zip", "sha256": "da6458e8864af553807de1c46a7a8eac0880bd6b99ba56288e87e86a45af884f", "format": "zip", "member": "gitleaks.exe"}
+      }
+    },
+    "checkov": {"version": "3.2.495", "install": "pip", "package": "checkov==3.2.495", "requirements": "checkov-requirements.txt"},
+    "shellcheck": {
+      "version": "0.11.0",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz", "sha256": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198", "format": "tar.xz", "member": "shellcheck-v0.11.0/shellcheck"},
+        "linux-aarch64": {"url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz", "sha256": "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588", "format": "tar.xz", "member": "shellcheck-v0.11.0/shellcheck"},
+        "darwin-x86_64": {"url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz", "sha256": "3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6", "format": "tar.xz", "member": "shellcheck-v0.11.0/shellcheck"},
+        "darwin-arm64": {"url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz", "sha256": "56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79", "format": "tar.xz", "member": "shellcheck-v0.11.0/shellcheck"},
+        "windows-x86_64": {"url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip", "sha256": "8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e", "format": "zip", "member": "shellcheck.exe"}
+      }
+    },
+    "psscriptanalyzer": {
+      "version": "1.24.0",
+      "install": "module",
+      "module": "PSScriptAnalyzer",
+      "requires": "pwsh",
+      "assets": {
+        "any": {"url": "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg", "sha256": "e86c97d44bb1bc8a1de35e753b85ea1d938f6f9f881639a181507e079bca4556", "format": "zip"}
+      }
+    },
+    "trivy": {
+      "version": "0.76.2",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz", "sha256": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf", "format": "tar.gz", "member": "trivy"},
+        "linux-aarch64": {"url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-ARM64.tar.gz", "sha256": "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3", "format": "tar.gz", "member": "trivy"},
+        "darwin-x86_64": {"url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_macOS-64bit.tar.gz", "sha256": "e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b", "format": "tar.gz", "member": "trivy"},
+        "darwin-arm64": {"url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_macOS-ARM64.tar.gz", "sha256": "ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8", "format": "tar.gz", "member": "trivy"},
+        "windows-x86_64": {"url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_windows-64bit.zip", "sha256": "691f737a7e5566a673c3a74dab9160552ec32101e953b659e5c77443d16dddb6", "format": "zip", "member": "trivy.exe"}
+      }
+    },
+    "osv-scanner": {
+      "version": "2.7.1",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64", "sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8", "format": "binary"},
+        "linux-aarch64": {"url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_arm64", "sha256": "983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81", "format": "binary"},
+        "darwin-x86_64": {"url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_darwin_amd64", "sha256": "b8420d5485ba792626315f1bf9a5a2046e971d38eea75bf9090c38852dbc3b1b", "format": "binary"},
+        "darwin-arm64": {"url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_darwin_arm64", "sha256": "b22c02877a811c8f78956e8643efa554932b7378f590d13f8e97d4e9448a29f3", "format": "binary"},
+        "windows-x86_64": {"url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_windows_amd64.exe", "sha256": "7121dcf420aefbbf89a7f0050c4d3094e079ff93afd334dfc96f16b02ec85800", "format": "binary"}
+      }
+    },
+    "syft": {
+      "version": "1.32.0",
+      "install": "download",
+      "assets": {
+        "linux-x86_64": {"url": "https://github.com/anchore/syft/releases/download/v1.32.0/syft_1.32.0_linux_amd64.tar.gz", "sha256": "d6400b579fa84dd383573b1d1ff6f081a37fc64d3ffaafdfdda95c4325f204be", "format": "tar.gz", "member": "syft"},
+        "linux-aarch64": {"url": "https://github.com/anchore/syft/releases/download/v1.32.0/syft_1.32.0_linux_arm64.tar.gz", "sha256": "df16ff55d6cf99b23f5121bf463bbda7b05b5674e897aca1b5c1fb64e1929667", "format": "tar.gz", "member": "syft"},
+        "darwin-x86_64": {"url": "https://github.com/anchore/syft/releases/download/v1.32.0/syft_1.32.0_darwin_amd64.tar.gz", "sha256": "06bb55b2bec2b723c1a860491f62e0fdc4f7f543d99cb83c75dea03c460c5053", "format": "tar.gz", "member": "syft"},
+        "darwin-arm64": {"url": "https://github.com/anchore/syft/releases/download/v1.32.0/syft_1.32.0_darwin_arm64.tar.gz", "sha256": "13065598834ab238f5865226d73b4a0a898913013a91be95cc83ddf7bbb75a1b", "format": "tar.gz", "member": "syft"},
+        "windows-x86_64": {"url": "https://github.com/anchore/syft/releases/download/v1.32.0/syft_1.32.0_windows_amd64.zip", "sha256": "444fd054f601594ad938ec3f9bfd92faacfd37783e0e107b49bcb41848bf5dc4", "format": "zip", "member": "syft.exe"}
+      }
+    }
+  }
+}

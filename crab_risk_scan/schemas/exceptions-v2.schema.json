@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jarhu/crab-risk-scan/schemas/exceptions-v2.schema.json",
+  "title": "CRAB exceptions, version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "exceptions"],
+  "properties": {
+    "version": {"const": 2},
+    "exceptions": {"type": "array", "items": {"$ref": "#/$defs/exception"}}
+  },
+  "$defs": {
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "status", "reason", "reviewer"],
+      "properties": {
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}(?!\\n)$"},
+        "status": {"enum": ["accepted", "false_positive", "not_affected"]},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+        "reviewer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "expires": {"anyOf": [{"type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}(?!\\n)$"},
+                              {"type": "null"}]},
+        "ticket": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+                             {"type": "null"}]},
+        "justification": {"anyOf": [{"$ref": "#/$defs/justification"}, {"type": "null"}]}
+      },
+      "if": {"properties": {"status": {"const": "not_affected"}}},
+      "then": {"required": ["justification"], "properties": {"justification": {"$ref": "#/$defs/justification"}}},
+      "else": {"properties": {"justification": {"type": "null"}}}
+    },
+    "justification": {
+      "enum": ["code_not_present", "code_not_reachable", "requires_configuration", "requires_dependency",
+               "requires_environment", "protected_by_compiler", "protected_at_runtime", "protected_at_perimeter",
+               "protected_by_mitigating_control"]
+    }
+  }
+}

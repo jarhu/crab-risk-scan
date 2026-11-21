@@ -1,0 +1,174 @@
+# CRAB steps template for Azure Pipelines (Linux agents with Docker).
+#
+#   resources:
+#     repositories:
+#       - repository: crab
+#         type: github
+#         name: jarhu/crab-risk-scan
+#         ref: refs/tags/v0.3.0
+#         endpoint: github-connection
+#   steps:
+#     - checkout: self
+#     - template: integrations/azure-devops/crab-scan.yml@crab
+#       parameters:
+#         policy: .crab/policy.json
+#
+# The scan step never fails on policy results. It publishes the SARIF file as the CodeAnalysisLogs
+# artifact (read by the SARIF SAST Scans Tab extension) and the full results folder, then a gate
+# step runs `crab-risk-scan gate` and fails the job on exit 1 (policy failed) or 2 (incomplete).
+
+parameters:
+  - name: path
+    type: string
+    default: "."
+  - name: engines
+    type: string
+    default: auto
+  - name: policy
+    type: string
+    default: ""
+  - name: exceptions
+    type: string
+    default: ""
+  - name: failOn
+    type: string
+    default: ""
+  - name: sbom
+    type: boolean
+    default: false
+  - name: annotations
+    type: number
+    default: 50
+  - name: cacheDir
+    type: string
+    default: ""
+  - name: updateDb
+    type: boolean
+    default: false
+  - name: serverUrl
+    type: string
+    default: ""
+  - name: project
+    type: string
+    default: ""
+  - name: tokenVariable
+    type: string
+    default: CRAB_TOKEN
+  - name: requireUpload
+    type: boolean
+    default: false
+  - name: gate
+    type: boolean
+    default: true
+  - name: image
+    type: string
+    default: ghcr.io/jarhu/crab-risk-scan:0.3.0
+  - name: resultsArtifact
+    type: string
+    default: crab-results
+
+steps:
+  - task: Bash@3
+    displayName: CRAB scan
+    env:
+      CRAB_IMAGE: ${{ parameters.image }}
+      CRAB_PATH: ${{ parameters.path }}
+      CRAB_ENGINES: ${{ parameters.engines }}
+      CRAB_POLICY: ${{ parameters.policy }}
+      CRAB_EXCEPTIONS: ${{ parameters.exceptions }}
+      CRAB_FAIL_ON: ${{ parameters.failOn }}
+      CRAB_SBOM: ${{ parameters.sbom }}
+      CRAB_ANNOTATIONS: ${{ parameters.annotations }}
+      CRAB_CACHE: ${{ parameters.cacheDir }}
+      CRAB_UPDATE_DB: ${{ parameters.updateDb }}
+      CRAB_SERVER_URL: ${{ parameters.serverUrl }}
+      CRAB_PROJECT: ${{ parameters.project }}
+      CRAB_REQUIRE_UPLOAD: ${{ parameters.requireUpload }}
+      CRAB_TOKEN: $(${{ parameters.tokenVariable }})
+      CRAB_RESULTS: $(Agent.TempDirectory)/crab-results
+    inputs:
+      targetType: inline
+      workingDirectory: $(Build.SourcesDirectory)
+      script: |
+        set -euo pipefail
+        # An undefined secret variable stays as the literal macro text; treat it as no token.
+        case "$CRAB_TOKEN" in '$('*')') CRAB_TOKEN="" ;; esac
+        export CRAB_TOKEN
+        mkdir -p "$CRAB_RESULTS" "$CRAB_RESULTS/sarif"
+        # Relative cache paths resolve against $(Pipeline.Workspace), outside the scanned sources. Without
+        # cacheDir the job uses its own empty cache: the image's cache belongs to uid 10001.
+        cache="${CRAB_CACHE:-$AGENT_TEMPDIRECTORY/crab-cache}"
+        case "$cache" in /*) ;; *) cache="$PIPELINE_WORKSPACE/$cache" ;; esac
+        mkdir -p "$cache"
+        # Run as the agent user with paths at their host locations, so the ##vso commands and the
+        # uploaded summary reference valid files. The sources are read-only; only the results folder
+        # and the cache are writable.
+        docker_args=(--rm --user "$(id -u):$(id -g)" -e HOME=/tmp --cap-drop ALL --security-opt no-new-privileges
+          -v "$BUILD_SOURCESDIRECTORY:$BUILD_SOURCESDIRECTORY:ro" -v "$CRAB_RESULTS:$CRAB_RESULTS"
+          -v "$cache:$cache" -w "$BUILD_SOURCESDIRECTORY")
+        for name in TF_BUILD BUILD_SOURCEVERSION BUILD_SOURCEBRANCH SYSTEM_PULLREQUEST_SOURCEBRANCH \
+                    BUILD_REPOSITORY_URI SYSTEM_COLLECTIONURI SYSTEM_TEAMPROJECT BUILD_BUILDID BUILD_SOURCESDIRECTORY; do
+          docker_args+=(-e "$name")
+        done
+        scan_args=(ci "$CRAB_PATH" --output-dir "$CRAB_RESULTS" --engines "$CRAB_ENGINES"
+          --annotations "$CRAB_ANNOTATIONS" --no-fail --cache-dir "$cache")
+        if [ "$CRAB_UPDATE_DB" = "True" ]; then
+          docker run "${docker_args[@]}" "$CRAB_IMAGE" db update --cache-dir "$cache" "$CRAB_PATH"
+        fi
+        [ -n "$CRAB_POLICY" ] && scan_args+=(--policy "$CRAB_POLICY")
+        [ -n "$CRAB_EXCEPTIONS" ] && scan_args+=(--exceptions "$CRAB_EXCEPTIONS")
+        [ -n "$CRAB_FAIL_ON" ] && scan_args+=(--fail-on "$CRAB_FAIL_ON")
+        [ "$CRAB_SBOM" = "True" ] && scan_args+=(--sbom)
+        if [ -n "$CRAB_SERVER_URL" ]; then
+          scan_args+=(--server "$CRAB_SERVER_URL" --project "$CRAB_PROJECT")
+          [ "$CRAB_REQUIRE_UPLOAD" = "True" ] && scan_args+=(--require-upload)
+          docker_args+=(-e CRAB_TOKEN)
+        else
+          docker_args+=(--network none)
+        fi
+        status=0
+        docker run "${docker_args[@]}" "$CRAB_IMAGE" "${scan_args[@]}" || status=$?
+        if [ -f "$CRAB_RESULTS/report.sarif" ]; then
+          cp "$CRAB_RESULTS/report.sarif" "$CRAB_RESULTS/sarif/crab-risk-scan.sarif"
+        fi
+        echo "##vso[task.setvariable variable=CRAB_RESULTS]$CRAB_RESULTS"
+        echo "##vso[task.setvariable variable=CRAB_SCAN_STATUS]$status"
+        if [ ! -s "$CRAB_RESULTS/report.json" ]; then
+          echo "##vso[task.logissue type=error]CRAB did not produce a report (exit $status)."
+          exit 2
+        fi
+
+  - task: PublishBuildArtifacts@1
+    displayName: Publish CodeAnalysisLogs (SARIF)
+    condition: succeededOrFailed()
+    inputs:
+      PathtoPublish: $(CRAB_RESULTS)/sarif
+      ArtifactName: CodeAnalysisLogs
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish CRAB results
+    condition: succeededOrFailed()
+    inputs:
+      targetPath: $(CRAB_RESULTS)
+      artifact: ${{ parameters.resultsArtifact }}
+
+  - ${{ if eq(parameters.gate, true) }}:
+      - task: Bash@3
+        displayName: CRAB gate
+        env:
+          CRAB_IMAGE: ${{ parameters.image }}
+          CRAB_POLICY: ${{ parameters.policy }}
+          CRAB_EXCEPTIONS: ${{ parameters.exceptions }}
+          CRAB_FAIL_ON: ${{ parameters.failOn }}
+        inputs:
+          targetType: inline
+          workingDirectory: $(Build.SourcesDirectory)
+          script: |
+            set -euo pipefail
+            gate_args=(gate "$CRAB_RESULTS/report.json")
+            [ -n "$CRAB_POLICY" ] && gate_args+=(--policy "$CRAB_POLICY")
+            [ -n "$CRAB_EXCEPTIONS" ] && gate_args+=(--exceptions "$CRAB_EXCEPTIONS")
+            [ -n "$CRAB_FAIL_ON" ] && gate_args+=(--fail-on "$CRAB_FAIL_ON")
+            docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp --cap-drop ALL --security-opt no-new-privileges \
+              -v "$BUILD_SOURCESDIRECTORY:$BUILD_SOURCESDIRECTORY:ro" -v "$CRAB_RESULTS:$CRAB_RESULTS:ro" \
+              -w "$BUILD_SOURCESDIRECTORY" "$CRAB_IMAGE" "${gate_args[@]}"

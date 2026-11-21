@@ -1,0 +1,129 @@
+# CRAB scan and gate jobs for GitLab CI.
+#
+# Include this file and override the variables as needed:
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/jarhu/crab-risk-scan/v0.3.0/integrations/gitlab-ci/crab.gitlab-ci.yml
+#
+# crab-scan always exits 0 so that GitLab ingests its SARIF (Ultimate) and Code Quality (all tiers)
+# reports. crab-gate re-evaluates the saved report with `crab-risk-scan gate` and fails the pipeline
+# when the policy fails (exit 1) or the scan was incomplete (exit 2).
+
+variables:
+  CRAB_IMAGE: ghcr.io/jarhu/crab-risk-scan:0.3.0
+  CRAB_SCAN_PATH: "."
+  CRAB_ENGINES: auto
+  CRAB_RESULTS: crab-results
+  CRAB_POLICY: ""
+  CRAB_EXCEPTIONS: ""
+  CRAB_FAIL_ON: ""
+  CRAB_SBOM: "false"
+  # GitLab caches only paths inside the checkout, and CRAB refuses a cache inside the scanned
+  # directory. The job moves the cache to CRAB_WORK_CACHE for the scan and back afterwards.
+  CRAB_CACHE_DIR: .crab-cache
+  CRAB_WORK_CACHE: /tmp/crab-cache
+  CRAB_UPDATE_DB: "false"
+  CRAB_SERVER_URL: ""
+  CRAB_PROJECT: ""
+  CRAB_EXTRA_ARGS: ""
+
+.crab-base:
+  stage: test
+  image:
+    name: $CRAB_IMAGE
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+crab-scan:
+  extends: .crab-base
+  # Only pipelines for protected branches write the cache. Merge request and unprotected pipelines
+  # read it, and the key separates protected from unprotected caches.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables:
+        CRAB_CACHE_POLICY: pull
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        CRAB_CACHE_POLICY: pull-push
+    - if: $CI_COMMIT_BRANCH
+      variables:
+        CRAB_CACHE_POLICY: pull
+    - if: $CI_COMMIT_TAG
+      variables:
+        CRAB_CACHE_POLICY: pull
+  cache:
+    key: crab-vulnerability-db-protected-$CI_COMMIT_REF_PROTECTED
+    policy: $CRAB_CACHE_POLICY
+    paths:
+      - $CRAB_CACHE_DIR
+  script:
+    - |
+      set --
+      [ -n "$CRAB_POLICY" ] && set -- "$@" --policy "$CRAB_POLICY"
+      [ -n "$CRAB_EXCEPTIONS" ] && set -- "$@" --exceptions "$CRAB_EXCEPTIONS"
+      [ -n "$CRAB_FAIL_ON" ] && set -- "$@" --fail-on "$CRAB_FAIL_ON"
+      [ "$CRAB_SBOM" = "true" ] && set -- "$@" --sbom
+      [ -n "$CRAB_SERVER_URL" ] && set -- "$@" --server "$CRAB_SERVER_URL" --project "$CRAB_PROJECT"
+      rm -rf "$CRAB_WORK_CACHE"
+      # A cache committed to the repository or a symlink would let the scanned code supply the
+      # vulnerability databases. Refuse both; fail closed when git cannot answer.
+      if [ -L "$CRAB_CACHE_DIR" ]; then
+        echo "Refusing $CRAB_CACHE_DIR: it is a symlink."
+        exit 1
+      fi
+      if ! tracked="$(git -c safe.directory="$CI_PROJECT_DIR" ls-files -- "$CRAB_CACHE_DIR")"; then
+        echo "Refusing $CRAB_CACHE_DIR: git could not check whether it is tracked."
+        exit 1
+      fi
+      if [ -n "$tracked" ]; then
+        echo "Refusing $CRAB_CACHE_DIR: it is tracked in the repository. Remove it from git."
+        exit 1
+      fi
+      if [ -d "$CRAB_CACHE_DIR" ]; then
+        mv "$CRAB_CACHE_DIR" "$CRAB_WORK_CACHE"
+      elif [ -e "$CRAB_CACHE_DIR" ]; then
+        echo "Refusing $CRAB_CACHE_DIR: it is not a directory."
+        exit 1
+      else
+        mkdir -p "$CRAB_WORK_CACHE"
+      fi
+      if [ "$CRAB_UPDATE_DB" = "true" ]; then
+        crab-risk-scan db update --cache-dir "$CRAB_WORK_CACHE" "$CRAB_SCAN_PATH" || echo "Database update failed; scanning with the cached databases."
+      fi
+      status=0
+      # CRAB_TOKEN (a masked CI/CD variable) is read from the environment in connected mode.
+      # CRAB_EXTRA_ARGS is split on spaces on purpose.
+      crab-risk-scan ci "$CRAB_SCAN_PATH" --output-dir "$CRAB_RESULTS" --engines "$CRAB_ENGINES" \
+        --cache-dir "$CRAB_WORK_CACHE" --no-fail "$@" $CRAB_EXTRA_ARGS || status=$?
+      mv "$CRAB_WORK_CACHE" "$CRAB_CACHE_DIR"
+      if [ ! -s "$CRAB_RESULTS/report.json" ]; then
+        echo "CRAB did not produce a report (exit $status)."
+        exit 1
+      fi
+      echo "CRAB scan finished with exit status $status. crab-gate enforces the policy."
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - $CRAB_RESULTS/
+    reports:
+      codequality: $CRAB_RESULTS/gl-code-quality-report.json
+      sarif: $CRAB_RESULTS/report.sarif
+
+crab-gate:
+  extends: .crab-base
+  needs:
+    - job: crab-scan
+      artifacts: true
+  variables:
+    GIT_STRATEGY: fetch
+  script:
+    - |
+      set --
+      [ -n "$CRAB_POLICY" ] && set -- "$@" --policy "$CRAB_POLICY"
+      [ -n "$CRAB_EXCEPTIONS" ] && set -- "$@" --exceptions "$CRAB_EXCEPTIONS"
+      [ -n "$CRAB_FAIL_ON" ] && set -- "$@" --fail-on "$CRAB_FAIL_ON"
+      crab-risk-scan gate "$CRAB_RESULTS/report.json" "$@"

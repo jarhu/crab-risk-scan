@@ -4,18 +4,34 @@ rules:
     severity: WARNING
     message: Review HTML assigned to this DOM element.
     pattern: $ELEMENT.innerHTML = $HTML
+    metadata:
+      category: security
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
   - id: crab-shell-command
     languages: [javascript, typescript]
     severity: WARNING
     message: Review the string passed to the shell.
     pattern: child_process.exec($COMMAND, ...)
+    metadata:
+      category: security
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
   - id: crab-react-html
     languages: [javascript, typescript]
     severity: WARNING
     message: Review the HTML passed through this React component.
     pattern: <$TAG ... dangerouslySetInnerHTML={$VALUE} ... />
+    metadata:
+      category: security
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
   - id: crab-rust-transmute
     languages: [rust]
     severity: INFO
     message: Review the validity and layout assumptions of this conversion.
     pattern: std::mem::transmute($VALUE)
+    metadata:
+      category: security
+      cwe:
+        - "CWE-843: Access of Resource Using Incompatible Type ('Type Confusion')"
