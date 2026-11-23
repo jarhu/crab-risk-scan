@@ -77,7 +77,8 @@ def verify_exports(api, job):
     assert detail["status"] == "failed" and detail["source"] == "job", detail["status"]
     sbom = api.request(scan + "/sbom")
     assert sbom["bomFormat"] == "CycloneDX"
-    assert ("crab-demo-leaf", "1.0.0") in {(x["name"], x["version"]) for x in sbom["components"]}
+    assert any(component["name"] == "crab-demo-leaf" and component.get("version") == "1.0.0"
+               for component in sbom["components"]), "expected crab-demo-leaf@1.0.0 in the SBOM"
     markdown = api.request(scan + "/report?format=markdown", raw=True).decode()
     assert markdown.startswith("# CRAB") and "CRAB-PY-001" in markdown
     with zipfile.ZipFile(io.BytesIO(api.request(scan + "/report?format=docx", raw=True))) as doc:
