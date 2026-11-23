@@ -9,8 +9,11 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
+from email.message import Message
 from pathlib import Path
 from unittest import mock
+from urllib.response import addinfourl
 
 from crab_risk_scan import worker as worker_module
 from crab_risk_scan.worker import Client, Heartbeat, JobError, Worker
@@ -57,6 +60,47 @@ class WorkerUnitTests(unittest.TestCase):
                          ("https://example.com/r.git", "--upload-pack=x"), ("https://example.com/r.git", "a/../b")):
             with self.subTest(url=url, ref=ref), self.assertRaises(JobError):
                 git.checkout(url, ref, self.root / "c", beat)
+
+    def test_execute_rechecks_the_project_root_before_scanning(self):
+        project = self.root / "demo"
+        other = self.root / "sibling"
+        other.mkdir()
+        work = Path(self.temp.name)
+        def execute(source):
+            return self.worker.execute({"source": source}, work, None)
+
+        with mock.patch.object(self.worker, "run_scan") as scan:
+            for source in (
+                {"type": "project_path", "path": str(other), "root": str(project)},
+                {"type": "project_path", "path": str(project), "root": None},
+                {"type": "path", "path": str(project)},  # legacy lease lacks scope
+            ):
+                with self.subTest(source=source), self.assertRaises(JobError):
+                    execute(source)
+            # Model a mount or symlink change on the worker after claim, including a
+            # retargeted project root. Global containment alone still succeeds.
+            original = os.path.realpath
+            with mock.patch("os.path.realpath", side_effect=lambda p: str(other) if Path(p) == project else original(p)):
+                with self.assertRaisesRegex(JobError, "scan_path"):
+                    execute({"type": "project_path", "path": str(project), "root": str(project)})
+            scan.assert_not_called()
+            scan.side_effect = JobError("reached scanner")
+            with self.assertRaisesRegex(JobError, "reached scanner"):
+                execute({"type": "project_path", "path": str(project), "root": str(project)})
+            self.assertIn(str(project), scan.call_args.args[0])
+
+    def test_authenticated_worker_request_stops_at_redirect(self):
+        headers = Message()
+        headers["Location"] = "http://second.invalid/redirected"
+        response = addinfourl(io.BytesIO(b""), headers, "http://first.invalid/", 302)
+        response.msg = "Found"
+        client = Client("http://first.invalid", "synthetic-worker-token")
+        with mock.patch.object(urllib.request.HTTPHandler, "http_open", side_effect=[response]) as transport:
+            with self.assertRaises(worker_module.ServerError) as caught:
+                client.request("POST", "/workers/claim", {"worker": "test"})
+        self.assertEqual(caught.exception.status, 302)
+        transport.assert_called_once()
+        self.assertEqual(transport.call_args.args[0].get_header("Authorization"), "Bearer synthetic-worker-token")
 
     def test_scan_command(self):
         output = Path(self.temp.name) / "out"

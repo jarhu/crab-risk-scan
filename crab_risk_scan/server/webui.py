@@ -1,5 +1,5 @@
 """Serve the built WebUI with an SPA fallback to index.html for non-API paths."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -26,7 +26,10 @@ def register(app, static_dir):
 
     @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def webui(path: str):
-        if path == "api" or path.startswith("api/"):
+        # The router supplies decoded URL paths. Reject filesystem syntax before any lookup.
+        if (path == "api" or path.startswith(("api/", "/")) or "\\" in path or ":" in path
+                or "\x00" in path or any(part == ".." or PureWindowsPath(part).is_reserved()
+                                         for part in path.split("/"))):
             raise ApiError(404, "Not Found")
         index = static_dir / "index.html"
         if not index.is_file():

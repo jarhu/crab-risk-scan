@@ -17,7 +17,7 @@ from sqlalchemy import and_, delete, func, not_, or_, select, update
 
 from .cron import CronExpression
 from .db import Finding, Job, LoginFailure, Project, ProjectException, Scan, Schedule, Worker, utcnow
-from .safety import blocked_address, contained, host_allowed, unc_or_device
+from .safety import blocked_address, contained, host_allowed, resolve_contained, unc_or_device, within
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
 CATEGORIES = ("sast", "secrets", "iac", "sca", "container")
@@ -379,9 +379,10 @@ def validate_scan_path(value, scan_roots):
     path = checked_path(value, "scan_path")
     if not scan_roots:
         raise ApiError(422, "scan_path needs CRAB_SCAN_ROOTS on the server")
-    if not inside(path, scan_roots):
+    resolved = resolve_contained(path, scan_roots)
+    if resolved is None:
         raise ApiError(422, "scan_path is outside the allowed scan roots")
-    return os.path.normpath(path)
+    return resolved
 
 
 def check_git_host(parts, git_hosts):
@@ -477,6 +478,33 @@ def validate_options(options):
     return result
 
 
+def queued_source(source, *, admin_source, scan_path):
+    # Only validated, administrator-submitted path jobs get the wider scope. Existing
+    # rows have no record of who submitted them and must use the project boundary.
+    if source["type"] != "path":
+        return source
+    if admin_source:
+        return {**source, "type": "admin_path"}
+    return {**source, "root": scan_path}
+
+
+def leased_source(source, scan_path, scan_roots):
+    if source["type"] == "admin_path":
+        return {"type": "path", "path": source["path"], "scope": "worker"}
+    if source["type"] != "path":
+        return source
+    # Intersect the enqueue-time grant and the current one. A removed grant, disjoint
+    # reassignment or changed symlink leaves the worker with no authorized directory.
+    root = None
+    if scan_path and contained(scan_path, scan_roots):
+        original = source.get("root", scan_path)
+        if within(scan_path, original):
+            root = scan_path
+        elif within(original, scan_path):
+            root = original
+    return {"type": "project_path", "path": source["path"], "root": root}
+
+
 def new_job(project_id, source, options, settings, schedule_id=None):
     return Job(project_id=project_id, status="queued", source=source, options=options,
                requires_git=source["type"] == "git", attempts=0, max_attempts=settings.max_attempts,
@@ -484,7 +512,10 @@ def new_job(project_id, source, options, settings, schedule_id=None):
 
 
 def job_item(job, key, *, log=False):
-    item = {"id": job.id, "project": key, "status": job.status, "source": job.source, "options": job.options,
+    source = job.source
+    if source["type"] in ("admin_path", "path"):
+        source = {"type": "path", "path": source["path"]}
+    item = {"id": job.id, "project": key, "status": job.status, "source": source, "options": job.options,
             "worker": job.worker, "attempts": job.attempts, "created_at": iso(job.created_at),
             "started_at": iso(job.started_at), "finished_at": iso(job.finished_at), "scan_id": job.scan_id,
             "error": job.error, "schedule_id": job.schedule_id}
@@ -635,7 +666,8 @@ def enqueue_due(db, settings, now=None):
         job = new_job(project_id, source, options, settings, schedule_id=schedule_id)
         try:
             scan_path = db.scalar(select(Project.scan_path).where(Project.id == project_id))
-            job.source = validate_source(source, settings, scan_path=scan_path, confined=not admin_source)
+            checked = validate_source(source, settings, scan_path=scan_path, confined=not admin_source)
+            job.source = queued_source(checked, admin_source=admin_source, scan_path=scan_path)
             job.options = validate_options(options)
         except ApiError as exc:
             job.status, job.finished_at, job.error = "failed", now, f"schedule source rejected: {exc.detail}"

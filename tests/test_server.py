@@ -665,6 +665,14 @@ class DashboardTests(ServerCase):
 
 
 class WebUiTests(ServerCase):
+    def test_rejects_unsafe_route_paths_before_filesystem_access(self):
+        with mock.patch.object(Path, "is_file", side_effect=AssertionError("filesystem lookup")), \
+                mock.patch.object(Path, "resolve", side_effect=AssertionError("filesystem lookup")):
+            for path in ("%2F%2Fexample.invalid/share", "%5C%5Cexample.invalid%5Cshare",
+                         "%2Fabsolute", "C%3Arelative", "assets/%2E%2E/other", "assets/NUL.txt"):
+                with self.subTest(path=path):
+                    self.assertEqual(self.client.get("/" + path).status_code, 404)
+
     def test_placeholder_without_assets(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -883,8 +891,8 @@ class PathSourceTests(ServerCase):
     def test_scan_path_is_admin_only(self):
         demo = str(self.repos / "demo")
         self.assertEqual(self.ok("PATCH", "/projects/demo", json={"scan_path": demo})["scan_path"],
-                         os.path.normpath(demo))
-        self.assertEqual(self.ok("GET", "/projects/demo", self.maintainer)["scan_path"], os.path.normpath(demo))
+                         os.path.realpath(demo))
+        self.assertEqual(self.ok("GET", "/projects/demo", self.maintainer)["scan_path"], os.path.realpath(demo))
         self.assertEqual(self.call("PATCH", "/projects/demo", self.maintainer,
                                    json={"scan_path": str(self.repos)}).status_code, 403)
         self.ok("PATCH", "/projects/demo", self.maintainer, json={"name": "Renamed"})
@@ -892,7 +900,7 @@ class PathSourceTests(ServerCase):
         self.assertEqual(self.call("PATCH", "/projects/demo", json={"scan_path": "relative"}).status_code, 422)
         created = self.ok("POST", "/projects", status=201,
                           json={"key": "scoped", "name": "Scoped", "scan_path": str(self.repos / "other")})
-        self.assertEqual(created["scan_path"], os.path.normpath(str(self.repos / "other")))
+        self.assertEqual(created["scan_path"], os.path.realpath(self.repos / "other"))
         self.assertIsNone(self.ok("PATCH", "/projects/demo", json={"scan_path": None})["scan_path"])
 
     def test_maintainer_path_jobs_stay_inside_the_scan_path(self):
@@ -925,6 +933,34 @@ class PathSourceTests(ServerCase):
         self.assertEqual(jobs[mine["id"]].status, "failed")
         self.assertIn("scan_path", jobs[mine["id"]].error)
         self.assertEqual(jobs[admins["id"]].status, "queued")
+        self.assertEqual(jobs[admins["id"]].source["type"], "admin_path")
+
+    def test_claim_binds_maintainer_jobs_to_current_and_original_project_grants(self):
+        path = str(self.repos / "demo")
+        token = self.token(["worker"])
+        def claim():
+            return self.ok("POST", "/workers/claim", token, json={"worker": "w"})["job"]["source"]
+
+        self.ok("PATCH", "/projects/demo", json={"scan_path": path})
+        public = {"type": "path", "path": path}
+        self.assertEqual(self.path_job(path, self.maintainer).json()["source"], public)
+        self.assertEqual(self.path_job(path, self.maintainer).status_code, 201)
+        self.ok("PATCH", "/projects/demo", json={"scan_path": str(self.repos)})
+        self.assertEqual(claim(), {"type": "project_path", "path": path, "root": os.path.realpath(path)})
+        self.ok("PATCH", "/projects/demo", json={"scan_path": str(self.repos / "other")})
+        self.assertIsNone(claim()["root"])
+        self.assertEqual(self.path_job(path).json()["source"], public)
+        self.assertEqual(claim(), {**public, "scope": "worker"})
+
+    def test_legacy_path_jobs_require_a_current_project_grant(self):
+        project = self.ok("GET", "/projects/demo")
+        source = {"type": "path", "path": str(self.repos / "demo")}
+        with self.app.state.sessions() as db:
+            db.add(service.new_job(project["id"], source, {}, self.settings))
+            db.commit()
+        worker = self.token(["worker"])
+        claim = self.ok("POST", "/workers/claim", worker, json={"worker": "w"})
+        self.assertEqual(claim["job"]["source"], {**source, "type": "project_path", "root": None})
 
     def test_unc_and_device_paths_are_rejected_without_resolving_them(self):
         with realpath_guard():

@@ -14,8 +14,8 @@ def within(path, root):
     return child == parent or child.startswith(parent.rstrip("\\/") + os.sep)
 
 
-def contained(path, roots):
-    """True when `path` lies inside one of the admin-configured `roots`.
+def resolve_contained(path, roots):
+    """Return the checked real path inside an admin-configured root, or None.
 
     The path must first be lexically inside a root as configured or as resolved: temporary
     folders are reached through aliases (macOS /var and /private/var, Windows 8.3 short names).
@@ -24,9 +24,13 @@ def contained(path, roots):
     """
     roots = [str(root) for root in roots]
     if not any(within(path, form) for root in roots for form in (root, os.path.realpath(root))):
-        return False
+        return None
     real = os.path.realpath(path)
-    return any(within(real, os.path.realpath(root)) for root in roots)
+    return real if any(within(real, os.path.realpath(root)) for root in roots) else None
+
+
+def contained(path, roots):
+    return resolve_contained(path, roots) is not None
 
 
 def blocked_address(address):
