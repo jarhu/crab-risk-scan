@@ -299,7 +299,8 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(by_rule["CRAB-LIC-001"]["license"], "AGPL-3.0-only")
             self.assertEqual({v["gate"] for v in report["policy"]["violations"]},
                              {"severity", "secrets", "malicious", "kev", "epss", "licenses"})
-            self.assertEqual(again["comparison"]["new"], 0)
+            self.assertEqual(again["comparison"]["new"], 1)
+            self.assertEqual([f["rule"] for f in again["comparison"]["unverified"]], ["aws-access-token"])
             self.assertEqual(again["comparison"]["fixed"], [])
             self.assertEqual(again["policy"]["suppressed"], 1)
 

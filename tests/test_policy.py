@@ -1,10 +1,12 @@
 import copy
 import gzip
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 
@@ -228,6 +230,7 @@ class EvaluationTests(unittest.TestCase):
         report = self.run_collect(policy=no_review)
         self.assertEqual(report["policy"]["actionable"], 3)
 
+    @mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": "11" * 32})
     def test_comparison_and_new_only(self):
         base_report = self.run_collect()
         (self.root / "Dockerfile").write_text("FROM scratch\nUSER 1000\n")

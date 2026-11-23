@@ -98,7 +98,7 @@ Exception: `{fingerprint, status, justification, reason, reviewer, expires, tick
 | GET /jobs | `status?`, `project?` | Job items | admin |
 | GET /jobs/{id} | | Job plus `log` | viewer of the project |
 | POST /jobs/{id}/cancel | | Job | maintainer of the project |
-| POST /workers/claim | `{worker, capabilities: {git: bool}}` | 200 `{job, lease_seconds}` or 204 | `worker` token |
+| POST /workers/claim | `{worker, capabilities: {git: bool}}` | 200 `{job, lease_seconds, lease_protocol}` or 204 | `worker` token |
 | POST /jobs/{id}/heartbeat | `{worker?, attempt?}` | `{lease_seconds, cancelled}` | `worker` token holding the lease |
 | POST /jobs/{id}/complete | `{report, sbom?, log?, worker?, attempt?}` | `{scan_id}` | `worker` token holding the lease |
 | POST /jobs/{id}/fail | `{error, log?, worker?, attempt?}` | `{id, status}` | `worker` token holding the lease |
