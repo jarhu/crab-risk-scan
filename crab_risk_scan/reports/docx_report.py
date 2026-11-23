@@ -8,6 +8,7 @@ import io
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import summary
 
@@ -17,9 +18,11 @@ TEMPLATE_EXPANDED_LIMIT = 100 * 1024 * 1024
 TEMPLATE_ENTRY_LIMIT = 2000
 # Parts that run code or embed foreign objects when the document is opened.
 ACTIVE_PARTS = re.compile(r"vbaProject|vbaData|activeX|oleObject|/embeddings/", re.IGNORECASE)
-RELATIONSHIP = re.compile(rb"<(?:\w+:)?Relationship\b[^>]*>")
-EXTERNAL_TARGET = re.compile(rb"""\bTargetMode\s*=\s*["']External["']""")
-HYPERLINK_TYPE = re.compile(rb"""\bType\s*=\s*["'][^"']*/relationships/hyperlink["']""")
+REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+HYPERLINK_TYPES = {
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink",
+}
 DETAIL_LIMIT = 200
 EXECUTIVE_TOP = 10
 SUMMARY_TOP = 5
@@ -444,7 +447,35 @@ def find_marker(document, qn):
     return None
 
 
-def check_template(path):
+def check_relationships(data, name):
+    from lxml import etree  # installed with python-docx
+
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True,
+                             remove_comments=True, remove_pis=True)
+    try:
+        root = etree.fromstring(data, parser)
+    except etree.XMLSyntaxError:
+        raise ValueError(f"Malformed DOCX relationships: {name}") from None
+    if root.getroottree().docinfo.doctype or root.tag != REL_NS + "Relationships" or root.attrib:
+        raise ValueError(f"Invalid DOCX relationships: {name}")
+    ids = set()
+    for rel in root:
+        target, kind, rid = rel.get("Target"), rel.get("Type"), rel.get("Id")
+        mode = rel.get("TargetMode", "Internal")
+        if (rel.tag != REL_NS + "Relationship" or len(rel) or not target or not kind or not rid or rid in ids
+                or set(rel.attrib) - {"Target", "Type", "Id", "TargetMode"} or mode not in {"Internal", "External"}):
+            raise ValueError(f"Invalid DOCX relationship: {name}")
+        ids.add(rid)
+        uri = urlsplit(target)
+        if mode == "External":
+            safe_link = (uri.scheme in {"http", "https"} and uri.hostname) or (uri.scheme == "mailto" and uri.path)
+            if kind not in HYPERLINK_TYPES or not safe_link or "\\" in target:
+                raise ValueError(f"DOCX template references external content: {name}")
+        elif uri.scheme or uri.netloc or target.startswith("//") or "\\" in target:
+            raise ValueError(f"DOCX template references external content: {name}")
+
+
+def check_template(path, package):
     """Refuse templates that expand too far or pull external content into generated reports.
 
     External hyperlinks are kept: they need a click. External templates, frames, images and
@@ -452,7 +483,7 @@ def check_template(path):
     an NTLM credential leak.
     """
     try:
-        archive = zipfile.ZipFile(path)
+        archive = zipfile.ZipFile(package)
     except (zipfile.BadZipFile, OSError) as error:
         raise ValueError(f"DOCX template could not be opened: {path.name}") from error
     with archive:
@@ -464,9 +495,7 @@ def check_template(path):
             if ACTIVE_PARTS.search(entry.filename):
                 raise ValueError(f"DOCX template contains macros or embedded objects: {path.name}")
             if entry.filename.lower().endswith(".rels"):
-                for relationship in RELATIONSHIP.findall(archive.read(entry)):
-                    if EXTERNAL_TARGET.search(relationship) and not HYPERLINK_TYPE.search(relationship):
-                        raise ValueError(f"DOCX template references external content: {path.name}")
+                check_relationships(archive.read(entry), path.name)
 
 
 def open_template(docx, template):
@@ -475,11 +504,15 @@ def open_template(docx, template):
         raise ValueError(f"DOCX template must be a .docx file: {path.name}")
     if not path.is_file():
         raise ValueError(f"DOCX template not found: {path.name}")
-    if path.stat().st_size > TEMPLATE_LIMIT:
+    with path.open("rb") as stream:
+        data = stream.read(TEMPLATE_LIMIT + 1)
+    if len(data) > TEMPLATE_LIMIT:
         raise ValueError(f"DOCX template exceeds {TEMPLATE_LIMIT // (1024 * 1024)} MiB: {path.name}")
-    check_template(path)
+    package = io.BytesIO(data)
+    check_template(path, package)
+    package.seek(0)
     try:
-        return docx.Document(str(path))
+        return docx.Document(package)
     except Exception as error:  # python-docx raises several unrelated types for damaged packages
         raise ValueError(f"DOCX template could not be opened: {path.name}") from error
 

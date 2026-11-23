@@ -293,6 +293,23 @@ class UploadTests(ServerCase):
         report["errors"] = [{"reason": "timeout", "producer": "bandit"}]
         self.assertEqual(self.upload(report=report)["status"], "incomplete")
 
+    def test_history_and_dashboard_load_only_summary_columns(self):
+        from sqlalchemy import event
+        self.project()
+        scan_id = self.upload()["id"]
+        statements = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement.lower())
+        event.listen(self.app.state.engine, "before_cursor_execute", capture)
+        try:
+            for route in ("/projects/demo/scans", "/projects/demo/dashboard", "/dashboard", "/projects"):
+                self.ok("GET", route)
+            self.assertFalse(any("report_gz" in sql or "sbom_gz" in sql for sql in statements))
+            self.assertEqual(self.call("GET", f"/scans/{scan_id}/findings?page=100001").status_code, 422)
+            self.assertEqual(self.ok("GET", f"/scans/{scan_id}/findings?page=100000")["items"], [])
+        finally:
+            event.remove(self.app.state.engine, "before_cursor_execute", capture)
+
     def test_schema_validation_does_not_echo_values(self):
         report = fixture()
         report["findings"][0]["severity"] = CANARY
@@ -745,6 +762,21 @@ class UploadAuthorizationTests(ServerCase):
         with mock.patch.object(api_projects, "parse_json", side_effect=parse):
             self.upload()
         self.assertEqual(seen, ["thread"])
+        self.assertEqual(self.app.state.body_slots.value, 2)
+
+    def test_slot_is_held_during_storage(self):
+        self.project()
+        worker = self.token(["worker"])
+        self.ok("POST", "/projects/demo/jobs", status=201,
+                json={"source": {"type": "path", "path": str(self.repos / "demo")}})
+        job = self.ok("POST", "/workers/claim", worker, json={"worker": "w1"})["job"]
+        original = service.store_scan
+        def check(*args, **kwargs):
+            self.assertEqual(self.app.state.body_slots.value, 1)
+            return original(*args, **kwargs)
+        with mock.patch.object(service, "store_scan", side_effect=check):
+            self.upload()
+            self.ok("POST", f"/jobs/{job['id']}/complete", worker, json={"report": fixture()})
         self.assertEqual(self.app.state.body_slots.value, 2)
 
     def test_nan_and_infinity_are_rejected(self):

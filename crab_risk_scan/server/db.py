@@ -107,8 +107,8 @@ class Scan(Base):
     violations: Mapped[list] = mapped_column(JSON)
     finding_total: Mapped[int] = mapped_column(Integer)
     new_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_gz: Mapped[bytes] = mapped_column(LargeBinary)
-    sbom_gz: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    report_gz: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    sbom_gz: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     ci: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

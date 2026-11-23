@@ -141,8 +141,9 @@ def complete_job(db, token, job_id, body, settings):
 async def complete(job_id: int, request: Request, db=Depends(get_db), principal: Principal = Depends(get_principal)):
     token = require_worker(principal)
     settings = request.app.state.settings
-    body = await read_json(request, body_limit(settings))
-    return await run_in_threadpool(complete_job, db, token, job_id, body, settings)
+    async with request.app.state.body_slots:
+        body = await read_json(request, body_limit(settings))
+        return await run_in_threadpool(complete_job, db, token, job_id, body, settings)
 
 
 @router.post("/jobs/{job_id}/fail")

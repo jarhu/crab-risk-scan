@@ -93,10 +93,8 @@ def validate_report(report):
     keyword, never instance values, because reports may contain sensitive data."""
     if not isinstance(report, dict):
         raise ApiError(422, "report must be a JSON object")
-    errors = sorted(_validator().iter_errors(report), key=lambda error: (len(error.absolute_path),
-                                                                          list(map(str, error.absolute_path))))
-    if errors:
-        error = errors[0]
+    error = next(_validator().iter_errors(report), None)
+    if error is not None:
         location = "/" + "/".join(str(part) for part in error.absolute_path)
         raise ApiError(422, f"report does not match schema 3 at {location} ({error.validator})")
     return report
