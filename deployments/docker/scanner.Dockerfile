@@ -40,7 +40,8 @@ RUN python -m venv /opt/crab/venv \
  && /opt/crab/venv/bin/pip install --require-hashes --no-deps -r /tmp/requirements.txt \
  && /opt/crab/venv/bin/pip install --no-deps --no-build-isolation /src \
  && rm /tmp/requirements.txt
-ENV PATH=/opt/crab/venv/bin:$PATH
+ENV PATH=/opt/crab/venv/bin:$PATH \
+    CRAB_ENGINE_DIR=/opt/crab/engines/bin
 
 # Pinned engines with SHA-256 verification: binaries in /opt/crab/engines/bin, pip engines in
 # /opt/crab/engines/venvs and the PSScriptAnalyzer module in /opt/crab/engines/modules.

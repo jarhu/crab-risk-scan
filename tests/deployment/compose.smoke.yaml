@@ -1,0 +1,5 @@
+services:
+  api:
+    image: ${SMOKE_SERVER_IMAGE:?}
+  worker:
+    image: ${SMOKE_SCANNER_IMAGE:?}
