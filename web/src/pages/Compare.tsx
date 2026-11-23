@@ -30,7 +30,7 @@ export default function Compare() {
   const base = params.get("base") ?? "";
   const { api } = useAuth();
   const { data, error, loading } = useAsync(() => (base ? api.compare(id, base) : Promise.reject(new Error("Choose a base scan to compare against."))), [id, base]);
-  const [tab, setTab] = useState<"new" | "fixed">("new");
+  const [tab, setTab] = useState<"new" | "fixed" | "unverified">("new");
   const [selected, setSelected] = useState<Finding | null>(null);
 
   return (
@@ -72,9 +72,12 @@ export default function Compare() {
             <button type="button" role="tab" aria-selected={tab === "fixed"} className={tab === "fixed" ? "active" : ""} onClick={() => setTab("fixed")}>
               Fixed ({data.fixed.length})
             </button>
+            <button type="button" role="tab" aria-selected={tab === "unverified"} className={tab === "unverified" ? "active" : ""} onClick={() => setTab("unverified")}>
+              Unverified ({data.unverified?.length ?? 0})
+            </button>
           </div>
           <div role="tabpanel">
-            <FindingsTable findings={tab === "new" ? data.new : data.fixed} onSelect={setSelected} />
+            <FindingsTable findings={data[tab] ?? []} onSelect={setSelected} />
           </div>
           <p className="muted">{data.unchanged} findings are present in both scans.</p>
         </>

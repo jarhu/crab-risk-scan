@@ -401,6 +401,13 @@ class DocxTests(unittest.TestCase):
                                                                            external + b"</Relationships>")))
             with self.assertRaisesRegex(ValueError, "external content"):
                 reports.render(report, "docx", template=remote)
+            for name, data in (("utf16", external), ("malformed", b"<Relationship")):
+                def encode(part):
+                    xml = part.decode("utf-8").split("?>", 1)[-1]
+                    return xml.replace("</Relationships>", data.decode() + "</Relationships>").encode("utf-16")
+                invalid = self.rewrite(base, Path(folder) / f"{name}.docx", replace=(rels, encode))
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    reports.render(report, "docx", template=invalid)
             linked = self.rewrite(base, Path(folder) / "linked.docx",
                                   replace=(rels, lambda data: data.replace(b"</Relationships>",
                                                                            hyperlink + b"</Relationships>")))

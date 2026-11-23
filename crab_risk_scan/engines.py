@@ -365,15 +365,15 @@ def inventory(root):
             path = Path(folder) / name
             if path.is_symlink():
                 continue
+            if len(files.paths) >= FILE_LIMIT:
+                files.truncated = True
+                return files
             rel = path.relative_to(root).as_posix()
             files.paths.append(rel)
             files.names.add(name)
             files.suffixes.add(PurePosixPath(name).suffix.lower())
             if name.startswith("Dockerfile") or name.endswith(".Dockerfile"):
                 files.names.add("Dockerfile")
-            if len(files.paths) >= FILE_LIMIT:
-                files.truncated = True
-                return files
     return files
 
 
@@ -760,11 +760,14 @@ def run_engines(options, work_root):
     results = []
     for name in names:
         engine = REGISTRY[name]
+        truncated = files.truncated and name != "trivy-image"
         manifest = pssa_manifest(target) if engine.tool == "psscriptanalyzer" else None
         meta, executable = _prepare(engine, options, target, files, cache_dir, manifest)
         if executable is not None and unsafe:
             meta, executable = dict(meta, status="failed", reason="work_dir_inside_target"), None
         if executable is None:
+            if truncated:
+                meta.update(status="failed", reason="inventory_truncated")
             results.append((engine.producer, None, meta))
             continue
         work = Workspace(Path(tempfile.mkdtemp(prefix=name + "-", dir=work_root)))
@@ -773,6 +776,8 @@ def run_engines(options, work_root):
         ctx = Context(name, executable, target, work, work.root / "report.json", files, cache_dir,
                       options.offline, options.image, meta["version"], manifest)
         status, reason = run_engine(engine, ctx, options.engine_timeout)
+        if truncated and status in {"complete", "partial", "skipped"}:
+            status, reason = ("partial" if ctx.report.is_file() else "failed"), "inventory_truncated"
         meta["status"] = status
         if reason:
             meta["reason"] = reason

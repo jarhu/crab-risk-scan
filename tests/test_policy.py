@@ -1,10 +1,12 @@
 import copy
 import gzip
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 
@@ -228,6 +230,7 @@ class EvaluationTests(unittest.TestCase):
         report = self.run_collect(policy=no_review)
         self.assertEqual(report["policy"]["actionable"], 3)
 
+    @mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": "11" * 32})
     def test_comparison_and_new_only(self):
         base_report = self.run_collect()
         (self.root / "Dockerfile").write_text("FROM scratch\nUSER 1000\n")
@@ -243,6 +246,10 @@ class EvaluationTests(unittest.TestCase):
         new, = [f for f in report["findings"] if f["new"]]
         self.assertEqual(new["rule"], "CRAB-PY-001")
         self.assertEqual(report["policy"]["violations"], [{"gate": "severity", "count": 1}])
+        other = self.save("other.json", dict(base_report, target="different-project"))
+        unverified = self.run_collect(new_since=other, policy=policy)["comparison"]
+        self.assertEqual(unverified["fixed"], [])
+        self.assertEqual(unverified["unverified"], comparison["fixed"])
         bad = self.save("bad.json", {"schema_version": 2, "findings": []})
         report = self.run_collect(new_since=bad)
         self.assertIn({"reason": "invalid_comparison_base"}, report["errors"])
@@ -304,15 +311,16 @@ class EvaluationTests(unittest.TestCase):
             {"fingerprint": f["fingerprint"], "status": "accepted", "reason": "Reviewed", "reviewer": "lead"}
             for f in report["findings"]]})
         quiet = reevaluate(report, exceptions=exceptions, today=TODAY)
-        self.assertTrue(quiet["policy"]["passed"])
-        self.assertEqual(exit_status(quiet), 0)
+        self.assertFalse(quiet["policy"]["passed"])
+        self.assertEqual([f["category"] for f in quiet["findings"] if not f["suppressed"]], ["secrets"])
+        self.assertEqual(exit_status(quiet), 1)
         # Without a new exceptions file, attached exceptions survive another evaluation.
-        self.assertTrue(reevaluate(quiet, today=TODAY)["policy"]["passed"])
+        self.assertEqual(reevaluate(quiet, today=TODAY)["policy"], quiet["policy"])
         with self.assertRaises(ValueError):
             reevaluate({"schema_version": 2})
         saved = self.save("report.json", report)
         run = cli("gate", saved, "--exceptions", exceptions)
-        self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
-        self.assertTrue(json.loads(run.stdout)["passed"])
+        self.assertEqual(run.returncode, 1, run.stderr + run.stdout)
+        self.assertFalse(json.loads(run.stdout)["passed"])
         run = cli("gate", saved, "--fail-on", "none")
         self.assertEqual(run.returncode, 1, run.stderr + run.stdout)

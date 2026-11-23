@@ -144,7 +144,7 @@ class Paging:
         self.size = page_size
 
     def apply(self, db, stmt, scalars=True):
-        total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
+        total = db.scalar(stmt.order_by(None).with_only_columns(func.count(), maintain_column_froms=True))
         stmt = stmt.offset((self.page - 1) * self.size).limit(self.size)
         rows = db.scalars(stmt).all() if scalars else db.execute(stmt).all()
         return rows, total

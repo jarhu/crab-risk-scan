@@ -129,10 +129,13 @@ class Client:
 class Heartbeat(threading.Thread):
     """Extends the job lease until stopped; flags cancellation or a lost lease."""
 
-    def __init__(self, client, job_id, worker, lease_seconds, stream):
+    def __init__(self, client, job_id, worker, lease_seconds, stream, attempt=None):
         super().__init__(name=f"crab-heartbeat-{job_id}", daemon=True)
         self.client = client
         self.job_id = job_id
+        self.claim_identity = {"worker": worker}
+        if attempt is not None:
+            self.claim_identity["attempt"] = attempt
         self.worker = worker
         self.interval = max(1.0, lease_seconds / 3)
         self.stream = stream
@@ -144,7 +147,7 @@ class Heartbeat(threading.Thread):
     def run(self):
         while not self._halt.wait(self.interval):
             try:
-                _, body = self.client.request("POST", f"/jobs/{self.job_id}/heartbeat", {"worker": self.worker})
+                _, body = self.client.request("POST", f"/jobs/{self.job_id}/heartbeat", self.claim_identity)
             except ServerError as exc:
                 if exc.status in (401, 403, 404, 409):
                     self.lost = True
@@ -373,7 +376,8 @@ class Worker:
         job = claim["job"]
         job_id = job["id"]
         self.say(f"claimed job {job_id} for project {job.get('project')}")
-        heartbeat = Heartbeat(self.client, job_id, self.name, float(claim.get("lease_seconds") or 300), self.stream)
+        heartbeat = Heartbeat(self.client, job_id, self.name, float(claim.get("lease_seconds") or 300), self.stream,
+                              attempt=job.get("attempts") if claim.get("lease_protocol") == 2 else None)
         heartbeat.start()
         result = error = None
         try:
@@ -390,7 +394,7 @@ class Worker:
         try:
             if result is not None:
                 report, sbom, log = result
-                body = {"report": report, "log": log, "worker": self.name}
+                body = {"report": report, "log": log, **heartbeat.claim_identity}
                 if sbom is not None:
                     body["sbom"] = sbom
                 try:
@@ -403,7 +407,7 @@ class Worker:
                     self.say(f"job {job_id} completed as scan {response['scan_id']}")
                     return "succeeded"
             self.send(f"/jobs/{job_id}/fail", {"error": str(error)[:ERROR_LIMIT], "log": tail(error.log) or None,
-                                               "worker": self.name})
+                                               **heartbeat.claim_identity})
             self.say(f"job {job_id} failed: {str(error)[:200]}")
         except (ServerError, OSError) as exc:
             self.say(f"could not report the result of job {job_id}: {exc}")

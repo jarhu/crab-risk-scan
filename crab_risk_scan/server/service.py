@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import and_, delete, func, not_, or_, select, update
 
+from ..evidence import CREDENTIAL_RULES, exception_eligible
 from .cron import CronExpression
 from .db import Finding, Job, LoginFailure, Project, ProjectException, Scan, Schedule, Worker, utcnow
 from .safety import blocked_address, contained, host_allowed, resolve_contained, unc_or_device, within
@@ -93,10 +94,8 @@ def validate_report(report):
     keyword, never instance values, because reports may contain sensitive data."""
     if not isinstance(report, dict):
         raise ApiError(422, "report must be a JSON object")
-    errors = sorted(_validator().iter_errors(report), key=lambda error: (len(error.absolute_path),
-                                                                          list(map(str, error.absolute_path))))
-    if errors:
-        error = errors[0]
+    error = next(_validator().iter_errors(report), None)
+    if error is not None:
         location = "/" + "/".join(str(part) for part in error.absolute_path)
         raise ApiError(422, f"report does not match schema 3 at {location} ({error.validator})")
     return report
@@ -162,7 +161,7 @@ def store_scan(db, project, report, *, sbom=None, source="upload", ci=None, job_
             "rule": finding["rule"], "path": finding.get("path"), "package_name": package.get("name"),
             "package_version": package.get("version"), "package_purl": package.get("purl"),
             "is_new": finding.get("new"), "embedded_suppressed": bool(finding.get("suppressed")),
-            "embedded_expires": exception.get("expires"),
+            "embedded_expires": exception.get("expires"), "credential_match": finding.get("credential_identity") == "hmac-sha256-v1",
             "data": json.dumps(finding, separators=(",", ":"), ensure_ascii=False),
         })
     for batch in chunks(rows):
@@ -181,8 +180,11 @@ def suppressed_clause(day):
     project_active = or_(ProjectException.expires.is_(None), ProjectException.expires > day)
     embedded_active = and_(Finding.embedded_suppressed.is_(True),
                            or_(Finding.embedded_expires.is_(None), Finding.embedded_expires > day))
-    return or_(and_(ProjectException.status.is_not(None), project_active),
-               and_(ProjectException.status.is_(None), embedded_active))
+    credential = or_(Finding.category == "secrets", *(and_(Finding.producer == producer, Finding.rule == rule)
+                                                      for producer, rule in CREDENTIAL_RULES))
+    return and_(or_(not_(credential), Finding.credential_match.is_(True)),
+                or_(and_(ProjectException.status.is_not(None), project_active),
+                    and_(ProjectException.status.is_(None), embedded_active)))
 
 
 def active(expires, day):
@@ -322,7 +324,10 @@ def project_exceptions(db, project_id, fingerprints=None):
 def overlay_finding(finding, row, day):
     """Apply the current project exception (row or None) to one report finding."""
     finding = dict(finding)
-    if row is not None:
+    if not exception_eligible(finding):
+        finding.pop("exception", None)
+        finding["suppressed"] = False
+    elif row is not None:
         finding["exception"] = report_exception(row)
         finding["suppressed"] = active(row.expires, day)
     elif finding.get("suppressed") and not active((finding.get("exception") or {}).get("expires"), day):
@@ -600,22 +605,33 @@ def claim_job(db, settings, worker_name, git, token_id):
     return None
 
 
-def held_job(db, job_id, token_id, worker_name):
-    job = db.get(Job, job_id)
+def locked_job(db, job_id):
+    stmt = select(Job).where(Job.id == job_id).with_for_update().execution_options(populate_existing=True)
+    job = db.scalar(stmt)
     if job is None:
         raise ApiError(404, "job not found")
-    if job.status == "cancelled":
-        raise ApiError(409, "job was cancelled")
-    if job.status != "running" or job.token_id != token_id or (worker_name and job.worker != worker_name):
-        raise ApiError(409, "job lease is not held by this worker")
     return job
 
 
-def heartbeat(db, settings, job_id, token_id, worker_name=None):
-    job = db.get(Job, job_id)
-    if job is not None and job.status == "cancelled":
+def held_job(db, job_id, token_id, worker_name, attempt=None, *, replay=False):
+    job = locked_job(db, job_id)
+    # Legacy workers can finish an initial claim. Reassignments require the claim generation.
+    generation = 1 if attempt is None else attempt
+    if (type(generation) is not int or generation != job.attempts or job.token_id != token_id
+            or (worker_name is not None and job.worker != worker_name)):
+        raise ApiError(409, "job lease is not held by this worker")
+    if replay and attempt is not None and job.status == "succeeded" and job.scan_id is not None:
+        return job
+    if job.status != "running" or job.lease_expires_at is None or job.lease_expires_at <= utcnow():
+        raise ApiError(409, "job lease is no longer active")
+    return job
+
+
+def heartbeat(db, settings, job_id, token_id, worker_name=None, attempt=None):
+    job = locked_job(db, job_id)
+    if job.status == "cancelled":
         return {"lease_seconds": 0, "cancelled": True}
-    job = held_job(db, job_id, token_id, worker_name)
+    job = held_job(db, job_id, token_id, worker_name, attempt)
     job.lease_expires_at = utcnow() + timedelta(seconds=settings.lease_seconds)
     touch_worker(db, job.worker, token_id, job_id=job.id)
     db.commit()
@@ -636,6 +652,7 @@ def finish_job(db, job, status, *, error=None, log=None, scan_id=None):
 
 
 def cancel_job(db, job):
+    job = locked_job(db, job.id)
     if job.status not in ("queued", "running"):
         raise ApiError(409, f"job is already {job.status}")
     finish_job(db, job, "cancelled", log=job.log)

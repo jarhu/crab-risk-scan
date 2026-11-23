@@ -124,7 +124,8 @@ def collect(local, *, root, inputs=(), run_manifest=None, revision=None, branch=
             continue
         if status == "failed" or path is None:
             entry["reason"] = identifier(meta.get("reason")) or "producer_failed"
-            errors.append({"input": index, "producer": name, "reason": "producer_failed"})
+            errors.append({"input": index, "producer": name,
+                           "reason": "inventory_truncated" if entry["reason"] == "inventory_truncated" else "producer_failed"})
             continue
         try:
             batch = ADAPTERS[name](load_json(path), root)
@@ -134,8 +135,9 @@ def collect(local, *, root, inputs=(), run_manifest=None, revision=None, branch=
             entry.update(producer_version=version, targets=batch.targets,
                          status=status if status in {"complete", "partial"} else "imported")
             if batch.partial or status == "partial":
-                entry.update(status="partial", reason="producer_partial")
-                errors.append({"input": index, "producer": name, "reason": "producer_partial"})
+                reason = "inventory_truncated" if meta.get("reason") == "inventory_truncated" else "producer_partial"
+                entry.update(status="partial", reason=reason)
+                errors.append({"input": index, "producer": name, "reason": reason})
             for hit in batch.findings:
                 hit.setdefault("producer_version", version)
                 hit.update(rule_pack=rule_pack, inputs=[index])

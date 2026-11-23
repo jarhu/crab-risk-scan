@@ -101,6 +101,14 @@ of those jobs outside the project boundary, submit it again after upgrading. Set
 `scan_path` stores its canonical directory. Re-save a pre-upgrade project path that
 uses a filesystem alias so workers can compare it to the resolved scan directory.
 
+### Upgrading stored scans and exceptions
+
+Schema 2 adds one scan per worker job. The upgrade keeps historical scans and preserves the result linked from each job. Any older duplicate scans remain in history with the redundant job association cleared. Upgrade workers alongside the API for retries after a lease expires.
+
+For stable credential exceptions, configure `CRAB_CREDENTIAL_KEY` in the trusted scanner environment with a separate randomly generated 32-byte key per project, encoded as 64 hexadecimal characters. Store it in the project's secret store. The key stays out of reports and external engine environments. Re-review existing credential exceptions after upgrading or rotating the key. Findings with missing source evidence remain open and actionable under a new-only gate. Other fingerprints retain their existing semantics.
+
+Schema-3 comparisons may include `unverified` for missing findings whose producer or scan target lacks comparable coverage. Older reports can omit this field.
+
 ## Later
 
 These items from the gap analysis follow the four phases: Opengrep taint rule packs, reachability, monorepo subprojects, an MCP server, signed report attestations and compliance mappings for OWASP, PCI DSS and the EU Cyber Resilience Act.

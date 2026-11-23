@@ -1,12 +1,12 @@
-import hashlib
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from crab_risk_scan.adapters import checkov, gitleaks, sarif
-from crab_risk_scan.evidence import assign_fingerprints, fingerprint, purl_key
+from crab_risk_scan.evidence import assign_fingerprints, purl_key
 from test_reports import cli, validate
 
 
@@ -135,34 +135,31 @@ class ArchitectureTests(unittest.TestCase):
                          ("critical", "unknown", "secrets"))
         self.assertEqual(doc["policy"]["violations"], [{"gate": "severity", "count": 1}])
 
-    def test_credential_fingerprints_follow_the_value_with_a_16_bit_tag(self):
-        rows = [{"producer": "gitleaks", "rule": "generic-api-key", "path": "a.env", "line": 1, "end_line": 1,
-                 "category": "secrets"}]
-        (self.root / "a.env").write_text("KEY=placeholder-0001\n")
-        first = assign_fingerprints([dict(r) for r in rows], self.root)[0]["fingerprint"]
-        (self.root / "a.env").write_text("# moved\nKEY=placeholder-0001\n")
-        moved = assign_fingerprints([dict(rows[0], line=2, end_line=2)], self.root)[0]["fingerprint"]
-        self.assertEqual(first, moved)
-        # Regression (security review F2): a real key swapped in at the same position used to keep the
-        # placeholder's fingerprint, so its exception silently suppressed the real key.
-        (self.root / "a.env").write_text("# moved\nKEY=real-key-value-0002\n")
-        swapped = assign_fingerprints([dict(rows[0], line=2, end_line=2)], self.root)[0]["fingerprint"]
-        self.assertNotEqual(first, swapped)
-        # Only 16 bits of the line hash enter the fingerprint, so it cannot confirm a guessed value.
-        line_hash = hashlib.sha256(b"KEY=real-key-value-0002").hexdigest()
-        self.assertEqual(swapped, fingerprint(["gitleaks", "generic-api-key", "a.env", line_hash[:4], 0]))
-        # Hard-coded password rules use the credential scheme too (security review F4).
-        (self.root / "b.py").write_text('password = "Summer2026!"\n')
-        b105 = assign_fingerprints([{"producer": "bandit", "rule": "B105", "path": "b.py", "line": 1,
-                                     "end_line": 1, "category": "sast"}], self.root)[0]["fingerprint"]
-        tag = hashlib.sha256(b'password = "Summer2026!"').hexdigest()[:4]
-        self.assertEqual(b105, fingerprint(["bandit", "B105", "b.py", tag, 0]))
+    @mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": "11" * 32})
+    def test_credential_fingerprints_require_a_project_key_and_exact_source(self):
+        hit = {"producer": "gitleaks", "rule": "generic-api-key", "path": "a.env", "line": 1,
+               "end_line": 1, "category": "secrets"}
+        def observe():
+            return assign_fingerprints([dict(hit)], self.root)[0]
+        self.assertNotIn("credential_identity", observe())
+        path = self.root / "a.env"
+        path.write_text("KEY='sample value'\n")
+        first = observe()
+        self.assertEqual(first["credential_identity"], "hmac-sha256-v1")
+        self.assertEqual(first, observe())
+        path.write_text("KEY='sample  value'\n")
+        self.assertNotEqual(first["fingerprint"], observe()["fingerprint"])
+        with mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": "22" * 32}):
+            self.assertNotEqual(first["fingerprint"], observe()["fingerprint"])
+        with mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": ""}):
+            self.assertNotIn("credential_identity", observe())
         source = [{"producer": "bandit", "rule": "B1", "path": "a.py", "line": 1, "end_line": 1}]
         (self.root / "a.py").write_bytes(b"x = 1\r\n")
         crlf = assign_fingerprints([dict(r) for r in source], self.root)[0]["fingerprint"]
         (self.root / "a.py").write_bytes(b"x  =  1\n")
         self.assertEqual(crlf, assign_fingerprints([dict(r) for r in source], self.root)[0]["fingerprint"])
 
+    @mock.patch.dict(os.environ, {"CRAB_CREDENTIAL_KEY": "11" * 32})
     def test_exception_for_a_placeholder_does_not_cover_a_swapped_secret(self):
         leaks = self.save("leaks.json", [{"RuleID": "generic-api-key", "File": "app.env", "StartLine": 1,
                                           "EndLine": 1, "StartColumn": 5, "EndColumn": 24}])
@@ -176,6 +173,18 @@ class ArchitectureTests(unittest.TestCase):
         doc = self.collect(1, "--gitleaks", leaks, "--exceptions", exceptions)
         self.assertFalse(doc["findings"][0]["suppressed"])
         self.assertEqual(doc["policy"]["stale_exceptions"], [hit["fingerprint"]])
+        (self.root / "app.env").unlink()
+        self.assertFalse(self.collect(1, "--gitleaks", leaks, "--exceptions", exceptions)["findings"][0]["suppressed"])
+
+    def test_new_only_gate_keeps_unverified_credentials_actionable(self):
+        leaks = self.save("leaks.json", [{"RuleID": "generic-api-key", "File": "unavailable.env", "StartLine": 1,
+                                          "EndLine": 1, "StartColumn": 1, "EndColumn": 8}])
+        base = self.save("base.json", self.collect(1, "--gitleaks", leaks))
+        policy = self.save("new-only.json", {"version": 1, "new_only": True})
+        head = self.collect(1, "--gitleaks", leaks, "--policy", policy, "--new-since", base)
+        self.assertTrue(head["findings"][0]["new"])
+        self.assertEqual(len(head["comparison"]["unverified"]), 1)
+        self.assertFalse(head["comparison"]["fixed"])
 
     def test_checkov_secret_results_drop_the_secret_hash(self):
         secret_hash = "25910f981e85ca04baf359199dd0bd4a3ae738b6"

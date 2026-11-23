@@ -26,13 +26,13 @@ class ClaimBody(Body):
 
 
 class HeartbeatBody(Body):
+    attempt: int | None = Field(None, ge=1, strict=True)
     worker: str | None = Field(None, max_length=64)
 
 
-class FailBody(Body):
+class FailBody(HeartbeatBody):
     error: str = Field(min_length=1, max_length=service.ERROR_LIMIT)
     log: str | None = Field(None, max_length=4 * service.LOG_LIMIT)
-    worker: str | None = Field(None, max_length=64)
 
 
 def job_project(db, job):
@@ -100,24 +100,28 @@ def claim(body: ClaimBody, request: Request, db=Depends(get_db), principal: Prin
     item = service.job_item(job, project.key)
     item["source"] = service.leased_source(job.source, project.scan_path, settings.scan_roots)
     item["repository_url"] = project.repository_url
-    return {"job": item, "lease_seconds": settings.lease_seconds}
+    return {"job": item, "lease_seconds": settings.lease_seconds, "lease_protocol": 2}
 
 
 @router.post("/jobs/{job_id}/heartbeat")
 def heartbeat(job_id: int, request: Request, body: HeartbeatBody | None = None, db=Depends(get_db),
               principal: Principal = Depends(get_principal)):
     token = require_worker(principal)
-    return service.heartbeat(db, request.app.state.settings, job_id, token.id, body.worker if body else None)
+    return service.heartbeat(db, request.app.state.settings, job_id, token.id, body.worker if body else None,
+                             body.attempt if body else None)
 
 
 def complete_job(db, token, job_id, body, settings):
-    unknown = set(body) - {"report", "sbom", "log", "worker"}
+    unknown = set(body) - {"report", "sbom", "log", "worker", "attempt"}
     if unknown:
         raise ApiError(422, "unknown fields: " + ", ".join(sorted(unknown)))
     worker = body.get("worker")
     if worker is not None and not isinstance(worker, str):
         raise ApiError(422, "worker must be a string")
-    job = service.held_job(db, job_id, token.id, worker)
+    attempt = body.get("attempt")
+    job = service.held_job(db, job_id, token.id, worker, attempt, replay=True)
+    if job.status == "succeeded":
+        return {"scan_id": job.scan_id}
     log = service.bounded_log(body.get("log"))
     try:
         if "report" not in body:
@@ -128,10 +132,12 @@ def complete_job(db, token, job_id, body, settings):
         report = service.validate_report(body["report"])
         sbom = service.validate_sbom(body.get("sbom"))
     except ApiError as exc:
+        service.held_job(db, job_id, token.id, worker, attempt)
         service.finish_job(db, job, "failed", error=f"worker returned an unusable report: {exc.detail}", log=log)
         db.commit()
         raise
     scan = service.store_scan(db, job_project(db, job), report, sbom=sbom, source="job", job_id=job.id)
+    service.held_job(db, job_id, token.id, worker, attempt)
     service.finish_job(db, job, "succeeded", log=log, scan_id=scan.id)
     db.commit()
     return {"scan_id": scan.id}
@@ -141,14 +147,15 @@ def complete_job(db, token, job_id, body, settings):
 async def complete(job_id: int, request: Request, db=Depends(get_db), principal: Principal = Depends(get_principal)):
     token = require_worker(principal)
     settings = request.app.state.settings
-    body = await read_json(request, body_limit(settings))
-    return await run_in_threadpool(complete_job, db, token, job_id, body, settings)
+    async with request.app.state.body_slots:
+        body = await read_json(request, body_limit(settings))
+        return await run_in_threadpool(complete_job, db, token, job_id, body, settings)
 
 
 @router.post("/jobs/{job_id}/fail")
 def fail(job_id: int, body: FailBody, db=Depends(get_db), principal: Principal = Depends(get_principal)):
     token = require_worker(principal)
-    job = service.held_job(db, job_id, token.id, body.worker)
+    job = service.held_job(db, job_id, token.id, body.worker, body.attempt)
     service.finish_job(db, job, "failed", error=body.error, log=body.log)
     db.commit()
     return {"id": job.id, "status": job.status}

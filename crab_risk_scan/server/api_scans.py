@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy import func, not_, or_, select
 
+from ..policy import comparable_producers, stable_ids, verified_absence
 from . import service
-from .auth import Principal, get_db, get_principal, load_project
+from .auth import Paging, Principal, get_db, get_principal, load_project
 from .db import Finding, Project, ProjectException, Scan, utcnow
 from .service import CATEGORIES, SEVERITIES, ApiError
 
@@ -69,7 +70,7 @@ def list_findings(scan_id: int, severity: str | None = Query(None, max_length=20
                   category: str | None = Query(None, max_length=200), status: str | None = Query(None),
                   producer: str | None = Query(None, max_length=500), kind: str | None = Query(None),
                   new: bool | None = Query(None), q: str | None = Query(None, max_length=200),
-                  page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500),
+                  paging: Paging = Depends(),
                   db=Depends(get_db), principal: Principal = Depends(get_principal)):
     scan, project = load_scan(db, principal, scan_id)
     day = service.today()
@@ -97,8 +98,7 @@ def list_findings(scan_id: int, severity: str | None = Query(None, max_length=20
         filters.append(or_(*(func.lower(column).like(pattern, escape="\\") for column in (
             Finding.rule, Finding.path, Finding.package_name, Finding.package_purl))))
     stmt = finding_rows(scan, filters)
-    total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    rows = db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).all()
+    rows, total = paging.apply(db, stmt, scalars=False)
     return {"items": [service.finding_item(json.loads(data), row, day) for data, row in rows], "total": total}
 
 
@@ -113,17 +113,21 @@ def compare(scan_id: int, base: int = Query(...), db=Depends(get_db), principal:
     base_rows = db.execute(finding_rows(base_scan)).all()
     head = [(json.loads(data), row) for data, row in head_rows]
     previous = [(json.loads(data), row) for data, row in base_rows]
-    head_prints = {finding["fingerprint"] for finding, _ in head}
-    base_prints = {finding["fingerprint"] for finding, _ in previous}
+    stable = stable_ids(finding for finding, _ in previous)
+    same = stable & stable_ids(finding for finding, _ in head)
     keys = {project.id: project.key}
     base_summary, head_summary = service.summaries(db, [base_scan, head_scan], keys)
+    head_report = service.unpack(head_scan.report_gz)
+    covered = comparable_producers(service.unpack(base_scan.report_gz), head_report)
+    disabled = set(head_report["policy"].get("disabled_rules", []))
+    missing = [(f, row) for f, row in previous if f["fingerprint"] not in same]
     return {
         "base": base_summary, "head": head_summary,
         "new": [service.finding_item(finding, row, day) for finding, row in head
-                if finding["fingerprint"] not in base_prints],
-        "fixed": [service.finding_item(finding, row, day) for finding, row in previous
-                  if finding["fingerprint"] not in head_prints],
-        "unchanged": sum(1 for finding, _ in head if finding["fingerprint"] in base_prints),
+                if finding["fingerprint"] not in same],
+        "fixed": [service.finding_item(f, row, day) for f, row in missing if verified_absence(f, covered, stable, disabled)],
+        "unverified": [service.finding_item(f, row, day) for f, row in missing if not verified_absence(f, covered, stable, disabled)],
+        "unchanged": len(same),
     }
 
 

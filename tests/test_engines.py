@@ -233,6 +233,18 @@ class ClassificationTests(unittest.TestCase):
 
 
 class DiscoveryTests(Folder):
+    def test_truncated_inventory_fails_the_scan_and_gate(self):
+        from crab_risk_scan.pipeline import execute
+        from crab_risk_scan.policy import exit_status, reevaluate
+        (self.target / "a.sh").write_text('#!/bin/sh\necho "$HOME"\n')
+        with mock.patch.object(engines, "FILE_LIMIT", 1):
+            self.assertFalse(engines.inventory(self.target).truncated)
+            (self.target / "b.sh").write_text("echo ok")
+            result = execute(ScanOptions(self.target, engines="shellcheck"))
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.report["imports"][0]["reason"], "inventory_truncated")
+        self.assertEqual(exit_status(reevaluate(result.report)), 2)
+
     def fake(self, folder):
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / engines.executable_name("gitleaks")

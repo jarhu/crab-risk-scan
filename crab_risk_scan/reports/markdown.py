@@ -108,17 +108,19 @@ def comparison_lines(model):
     if not comparison:
         return ["No base report was given, so new and fixed findings are not computed.", ""]
     lines = [f"Base revision: {esc(comparison.get('base_revision') or 'not recorded')}. "
-             f"New: {comparison['new']}. Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}.", ""]
-    if comparison["fixed"]:
+             f"New: {comparison['new']}. Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}. Unverified: {len(comparison.get('unverified', []))}.", ""]
+    for key, heading in (("fixed", "Fixed since the base report"), ("unverified", "Missing comparable coverage")):
+        if not comparison.get(key):
+            continue
         rows = []
-        for fixed in comparison["fixed"]:
+        for fixed in comparison[key]:
             span = f":{fixed['line']}" if fixed.get("line") else ""
             where = (fixed.get("path") or "") + span if fixed.get("path") else \
                 summary.package_ref(fixed) or "not located"
             rows.append([summary.SEVERITY_LABELS.get(fixed["severity"], esc(fixed["severity"])),
                          esc(summary.CATEGORY_LABELS.get(fixed["category"], fixed["category"])),
                          esc(f"{fixed['producer']}/{fixed['rule']}"), esc(where), esc(fixed["fingerprint"][:12])])
-        lines += ["Fixed since the base report:", ""]
+        lines += [heading + ":", ""]
         lines += table(["Severity", "Category", "Rule", "Location", "Fingerprint"], rows)
     return lines
 

@@ -138,6 +138,7 @@
         "inputs": {"type": "array", "items": {"type": "integer", "minimum": 1}},
         "inventory_components": {"type": "array", "items": {"type": "integer", "minimum": 0}},
         "new": {"type": "boolean"},
+        "credential_identity": {"const": "hmac-sha256-v1"},
         "suppressed": {"type": "boolean"},
         "exception": {"$ref": "#/$defs/exception"}
       }
@@ -188,6 +189,7 @@
         "base_revision": {"$ref": "#/$defs/nullableIdentifier"},
         "new": {"type": "integer", "minimum": 0},
         "unchanged": {"type": "integer", "minimum": 0},
+        "unverified": {"$ref": "#/$defs/comparison/properties/fixed"},
         "fixed": {
           "type": "array",
           "items": {
@@ -222,6 +224,7 @@
         "actionable": {"type": "integer", "minimum": 0},
         "suppressed": {"type": "integer", "minimum": 0},
         "disabled_findings": {"type": "integer", "minimum": 0},
+        "disabled_rules": {"type": "array", "items": {"type": "string", "maxLength": 513}, "uniqueItems": true},
         "violations": {
           "type": "array",
           "items": {

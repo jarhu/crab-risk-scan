@@ -104,13 +104,12 @@ async def read_json(request, limit):
     length = request.headers.get("content-length")
     if length and length.isdigit() and int(length) > limit:
         raise ApiError(413, "request body too large")
-    async with request.app.state.body_slots:
-        body = bytearray()
-        async for chunk in request.stream():
-            body += chunk
-            if len(body) > limit:
-                raise ApiError(413, "request body too large")
-        return await run_in_threadpool(parse_json, body)
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise ApiError(413, "request body too large")
+    return await run_in_threadpool(parse_json, body)
 
 
 def body_limit(settings):
@@ -285,8 +284,9 @@ def store_upload(db, project, body, settings, base_url):
 async def upload_scan(key: str, request: Request, db=Depends(get_db), principal: Principal = Depends(get_principal)):
     settings = request.app.state.settings
     project = await run_in_threadpool(authorize_upload, db, principal, key)
-    body = await read_json(request, body_limit(settings))
-    return await run_in_threadpool(store_upload, db, project, body, settings, str(request.base_url))
+    async with request.app.state.body_slots:
+        body = await read_json(request, body_limit(settings))
+        return await run_in_threadpool(store_upload, db, project, body, settings, str(request.base_url))
 
 
 @router.get("/projects/{key}/scans")

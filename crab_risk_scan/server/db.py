@@ -8,7 +8,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utcnow():
@@ -94,6 +94,7 @@ class Membership(Base):
 
 class Scan(Base):
     __tablename__ = "scans"
+    __table_args__ = (Index("uq_scans_job", "job_id", unique=True),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     revision: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -107,8 +108,8 @@ class Scan(Base):
     violations: Mapped[list] = mapped_column(JSON)
     finding_total: Mapped[int] = mapped_column(Integer)
     new_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_gz: Mapped[bytes] = mapped_column(LargeBinary)
-    sbom_gz: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    report_gz: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    sbom_gz: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     ci: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -131,6 +132,7 @@ class Finding(Base):
     package_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     package_purl: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_new: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    credential_match: Mapped[bool] = mapped_column(Boolean, default=False)
     embedded_suppressed: Mapped[bool] = mapped_column(Boolean)
     embedded_expires: Mapped[str | None] = mapped_column(String(10), nullable=True)
     data: Mapped[str] = mapped_column(Text)
@@ -237,17 +239,34 @@ def initialize(engine):
         Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as session:
-        info = session.get(SchemaInfo, 1)
+        info = session.scalar(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
         if info is None:
             session.add(SchemaInfo(id=1, version=SCHEMA_VERSION))
             try:
                 session.commit()
             except IntegrityError:
                 session.rollback()
-                info = session.get(SchemaInfo, 1)
+                info = session.scalar(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
         if info is not None and info.version > SCHEMA_VERSION:
             raise RuntimeError(f"database schema {info.version} is newer than this CRAB release "
                                f"(schema {SCHEMA_VERSION}); upgrade crab-risk-scan")
+        if info is not None and info.version < 2:
+            # Preserve historical scans. Keep the job's selected result when early servers
+            # recorded duplicates, and detach only the redundant associations.
+            session.connection().exec_driver_sql("""
+                WITH duplicates AS (
+                    SELECT s.job_id, COALESCE(MAX(CASE WHEN s.id = j.scan_id THEN s.id END), MIN(s.id)) AS keep_id
+                    FROM scans s LEFT JOIN jobs j ON j.id = s.job_id
+                    WHERE s.job_id IS NOT NULL GROUP BY s.job_id HAVING COUNT(*) > 1
+                )
+                UPDATE scans SET job_id = NULL
+                WHERE job_id IN (SELECT job_id FROM duplicates) AND id NOT IN (SELECT keep_id FROM duplicates)
+            """)
+            session.connection().exec_driver_sql(
+                "ALTER TABLE findings ADD COLUMN credential_match BOOLEAN DEFAULT FALSE NOT NULL")
+            session.connection().exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_scans_job ON scans (job_id)")
+            info.version = 2
+        session.commit()
     return factory
 
 
