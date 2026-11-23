@@ -66,7 +66,7 @@ Project: `{id, key, name, repository_url, default_branch, scan_path, created_at,
 | GET /projects/{key}/scans | `branch?` | ScanSummary items, newest first | viewer |
 | GET /scans/{id} | | ScanDetail | viewer |
 | GET /scans/{id}/findings | `severity`, `category`, `status=open\|suppressed`, `producer`, `kind=vulnerability\|review`, `new=true\|false`, `q` | Finding items in report order | viewer |
-| GET /scans/{id}/compare?base={id} | | `{base, head, new: [Finding], fixed: [Finding], unchanged: n}` | viewer |
+| GET /scans/{id}/compare?base={id} | | `{base, head, new: [Finding], fixed: [Finding], unverified: [Finding], unchanged: n}` | viewer |
 | GET /scans/{id}/report | `format=json\|sarif\|markdown\|html\|csv\|docx\|codequality\|vex`, `template=technical\|executive` | File download | viewer |
 | GET /scans/{id}/sbom | | Stored SBOM download, or 404 | viewer |
 
@@ -99,12 +99,12 @@ Exception: `{fingerprint, status, justification, reason, reviewer, expires, tick
 | GET /jobs/{id} | | Job plus `log` | viewer of the project |
 | POST /jobs/{id}/cancel | | Job | maintainer of the project |
 | POST /workers/claim | `{worker, capabilities: {git: bool}}` | 200 `{job, lease_seconds}` or 204 | `worker` token |
-| POST /jobs/{id}/heartbeat | `{worker?}` | `{lease_seconds, cancelled}` | `worker` token holding the lease |
-| POST /jobs/{id}/complete | `{report, sbom?, log?, worker?}` | `{scan_id}` | `worker` token holding the lease |
-| POST /jobs/{id}/fail | `{error, log?, worker?}` | `{id, status}` | `worker` token holding the lease |
+| POST /jobs/{id}/heartbeat | `{worker?, attempt?}` | `{lease_seconds, cancelled}` | `worker` token holding the lease |
+| POST /jobs/{id}/complete | `{report, sbom?, log?, worker?, attempt?}` | `{scan_id}` | `worker` token holding the lease |
+| POST /jobs/{id}/fail | `{error, log?, worker?, attempt?}` | `{id, status}` | `worker` token holding the lease |
 | GET /workers | | `{name, last_seen_at, current_job, active, capabilities}` items | admin |
 
-Job: `{id, project, status: "queued"|"running"|"succeeded"|"failed"|"cancelled", source, options, worker, attempts, created_at, started_at, finished_at, scan_id, error, schedule_id}`. Claimed jobs also carry the project's `repository_url`. Path sources must be absolute, not UNC or device paths, and inside `CRAB_SCAN_ROOTS`. Non-admin callers must also stay inside the project's `scan_path`; without one, their path sources answer 422. Git URLs must be http or https without credentials, and their host must be listed in `CRAB_GIT_HOSTS` (otherwise 422). A project holds at most 100 queued jobs. The server authorizes an upload before reading its body. A complete call with an invalid report fails the job and answers 422. Logs keep the last 64 KiB. Any `worker` token can claim any project's job.
+Job: `{id, project, status: "queued"|"running"|"succeeded"|"failed"|"cancelled", source, options, worker, attempts, created_at, started_at, finished_at, scan_id, error, schedule_id}`. A claim with `lease_protocol: 2` supplies the generation in `job.attempts`. Send it as `attempt` on heartbeat, failure and completion requests. A duplicate completion for the same generation returns the stored scan ID. Legacy clients can finish an initial lease. Reassigned jobs require a generation. Claimed jobs also carry the project's `repository_url`. Path sources must be absolute, not UNC or device paths, and inside `CRAB_SCAN_ROOTS`. Non-admin callers must also stay inside the project's `scan_path`; without one, their path sources answer 422. Git URLs must be http or https without credentials, and their host must be listed in `CRAB_GIT_HOSTS` (otherwise 422). A project holds at most 100 queued jobs. The server authorizes an upload before reading its body. A complete call with an invalid report fails the job and answers 422. Logs keep the last 64 KiB. Any `worker` token can claim any project's job.
 
 ## Schedules
 

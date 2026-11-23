@@ -209,6 +209,27 @@ class ActionShellTests(unittest.TestCase):
 
 
 class AzureTemplateTests(unittest.TestCase):
+    def test_required_upload_error_fails_with_diagnostics(self):
+        bash = posix_bash()
+        if not bash:
+            self.skipTest("POSIX bash not available")
+        template = read(TEMPLATES[0])
+        script = block_after(template, r"^      script: \|$", 8)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_stub(root, "docker", 'echo "{}" > "$CRAB_RESULTS/report.json"\nexit 2\n')
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"], CRAB_TOKEN="test",
+                       CRAB_RESULTS=shell_path(root / "results"), AGENT_TEMPDIRECTORY=shell_path(root),
+                       BUILD_SOURCESDIRECTORY=shell_path(root), CRAB_CACHE="", CRAB_PATH=".", CRAB_ENGINES="none",
+                       CRAB_ANNOTATIONS="0", CRAB_UPDATE_DB="False", CRAB_POLICY="", CRAB_EXCEPTIONS="",
+                       CRAB_FAIL_ON="", CRAB_SBOM="False", CRAB_SERVER_URL="https://ci.example.invalid",
+                       CRAB_REQUIRE_UPLOAD="True", CRAB_PROJECT="demo", CRAB_IMAGE="scanner")
+            run = subprocess.run([bash, "-c", script], cwd=root, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+            self.assertIn("CRAB_SCAN_STATUS]2", run.stdout)
+            self.assertTrue((root / "results/report.json").is_file())
+
+
     def test_sources_are_mounted_read_only(self):
         text = read(TEMPLATES[0])
         self.assertIn('-v "$BUILD_SOURCESDIRECTORY:$BUILD_SOURCESDIRECTORY:ro"', text)
@@ -255,6 +276,11 @@ exec "$CRAB_TEST_PYTHON" -m crab_risk_scan "$@"
 """
             write_stub(bin_dir, "crab-risk-scan", stub)
             prepare(project)
+            if scenario == "image-cache":
+                image_cache = tmp_path / "image-cache"
+                image_cache.mkdir()
+                (image_cache / "trusted-db").write_text("seed")
+                script = script.replace("/opt/crab/cache", shell_path(image_cache))
             env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                        CI_PROJECT_DIR=project.as_posix(), CRAB_CACHE_DIR=".crab-cache",
                        CRAB_WORK_CACHE=(tmp_path / "work-cache").as_posix(), CRAB_RESULTS="crab-results",
@@ -268,6 +294,8 @@ exec "$CRAB_TEST_PYTHON" -m crab_risk_scan "$@"
                        CRAB_FAIL_ON="low")
             result = subprocess.run([bash, "-c", script], cwd=project, env=env, capture_output=True, text=True,
                                     timeout=60)
+            if scenario == "image-cache":
+                self.assertEqual((project / ".crab-cache/trusted-db").read_text(), "seed")
             report = project / "crab-results" / "report.json"
             if gate:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -298,6 +326,10 @@ exec "$CRAB_TEST_PYTHON" -m crab_risk_scan "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(cache_back)
         self.assertTrue(report)
+
+    def test_cache_miss_seeds_from_the_image(self):
+        result, _, _ = self.run_scan(self.init, scenario="image-cache")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def prepare_stale(self, project):
         self.init(project)

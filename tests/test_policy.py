@@ -308,15 +308,16 @@ class EvaluationTests(unittest.TestCase):
             {"fingerprint": f["fingerprint"], "status": "accepted", "reason": "Reviewed", "reviewer": "lead"}
             for f in report["findings"]]})
         quiet = reevaluate(report, exceptions=exceptions, today=TODAY)
-        self.assertTrue(quiet["policy"]["passed"])
-        self.assertEqual(exit_status(quiet), 0)
+        self.assertFalse(quiet["policy"]["passed"])
+        self.assertEqual([f["category"] for f in quiet["findings"] if not f["suppressed"]], ["secrets"])
+        self.assertEqual(exit_status(quiet), 1)
         # Without a new exceptions file, attached exceptions survive another evaluation.
-        self.assertTrue(reevaluate(quiet, today=TODAY)["policy"]["passed"])
+        self.assertEqual(reevaluate(quiet, today=TODAY)["policy"], quiet["policy"])
         with self.assertRaises(ValueError):
             reevaluate({"schema_version": 2})
         saved = self.save("report.json", report)
         run = cli("gate", saved, "--exceptions", exceptions)
-        self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
-        self.assertTrue(json.loads(run.stdout)["passed"])
+        self.assertEqual(run.returncode, 1, run.stderr + run.stdout)
+        self.assertFalse(json.loads(run.stdout)["passed"])
         run = cli("gate", saved, "--fail-on", "none")
         self.assertEqual(run.returncode, 1, run.stderr + run.stdout)

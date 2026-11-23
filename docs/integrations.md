@@ -126,7 +126,7 @@ A malformed or out-of-scope report produces an `invalid_report` error for that i
 | `--policy` | [policy-v1](../crab_risk_scan/schemas/policy-v1.schema.json) | Severity threshold, gates (secrets, malicious, KEV, EPSS, licenses, counts), new-only mode, disabled rules, severity overrides, license allow and deny lists |
 | `--exceptions` | [exceptions-v2](../crab_risk_scan/schemas/exceptions-v2.schema.json) | Per-fingerprint `accepted`, `false_positive` or `not_affected` status with reviewer, reason, optional expiry and ticket |
 | `--epss`, `--kev` | Offline EPSS CSV (optionally gzip) and CISA KEV JSON | Enrichment that drives the `epss` and `kev` gates |
-| `--new-since` | A previous schema-3 report | Marks new and fixed findings |
+| `--new-since` | A previous schema-3 report | Marks new, unchanged, fixed and unverified findings |
 
 `--fail-on LEVEL|none` overrides the policy threshold. Without a policy file every unsuppressed finding fails. `crab-risk-scan gate REPORT.json [--policy ...]` re-evaluates a saved report and prints the policy result. Exit status is 2 when the report has errors, 1 when the policy fails and 0 otherwise.
 

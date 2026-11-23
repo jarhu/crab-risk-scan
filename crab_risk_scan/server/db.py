@@ -94,6 +94,7 @@ class Membership(Base):
 
 class Scan(Base):
     __tablename__ = "scans"
+    __table_args__ = (Index("uq_scans_job", "job_id", unique=True),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     revision: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -238,21 +239,20 @@ def initialize(engine):
         Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as session:
-        info = session.get(SchemaInfo, 1)
+        info = session.scalar(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
         if info is None:
             session.add(SchemaInfo(id=1, version=SCHEMA_VERSION))
             try:
                 session.commit()
             except IntegrityError:
                 session.rollback()
-                info = session.get(SchemaInfo, 1)
+                info = session.scalar(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
         if info is not None and info.version > SCHEMA_VERSION:
             raise RuntimeError(f"database schema {info.version} is newer than this CRAB release "
                                f"(schema {SCHEMA_VERSION}); upgrade crab-risk-scan")
         if info is not None and info.version < 2:
             # Preserve historical scans. Keep the job's selected result when early servers
             # recorded duplicates, and detach only the redundant associations.
-            session.execute(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
             session.connection().exec_driver_sql("""
                 UPDATE scans SET job_id = NULL WHERE job_id IS NOT NULL AND id <> (
                     SELECT COALESCE(MAX(CASE WHEN s.id = j.scan_id THEN s.id END), MIN(s.id))
@@ -260,8 +260,8 @@ def initialize(engine):
             """)
             session.connection().exec_driver_sql(
                 "ALTER TABLE findings ADD COLUMN credential_match BOOLEAN DEFAULT FALSE NOT NULL")
+            session.connection().exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_scans_job ON scans (job_id)")
             info.version = 2
-        session.connection().exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_scans_job ON scans (job_id)")
         session.commit()
     return factory
 

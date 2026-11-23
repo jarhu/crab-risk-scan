@@ -29,6 +29,30 @@ jobs:
       - run: python -m pip install '.[docx,server,dev]'
       - run: python -m unittest discover -s tests -v
 
+  postgres:
+    name: Concurrent worker completion (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:526f86d93c6ea08fd3f1fe5605650cacc781b2c6013169a0ad8f42c7d3d84f32
+        env:
+          POSTGRES_DB: crab_test
+          POSTGRES_PASSWORD: ci-fixture
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install '.[server,postgres,dev]'
+      - run: python -m unittest discover -s tests -p test_server.py -k ConcurrentCompletionTests -v
+        env:
+          CRAB_TEST_POSTGRES: postgresql+psycopg://postgres:ci-fixture@localhost:5432/crab_test
+
   engines:
     name: Live engines (Ubuntu, Python 3.13)
     runs-on: ubuntu-latest

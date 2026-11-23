@@ -288,6 +288,21 @@ class UploadTests(ServerCase):
         self.assertEqual(history["total"], 1)
         self.assertEqual(self.ok("GET", "/projects/demo")["latest_scan"]["id"], scan["id"])
 
+    def test_schema_one_upgrade_preserves_duplicate_job_scans(self):
+        from crab_risk_scan.server.db import initialize, schema_version
+        first, second = self.upload()["id"], self.upload()["id"]
+        job_id = self.ok("POST", "/projects/demo/jobs", status=201, json={
+            "source": {"type": "path", "path": str(self.repos / "demo")}})["id"]
+        with self.app.state.engine.begin() as conn:
+            conn.exec_driver_sql("DROP INDEX uq_scans_job")
+            conn.exec_driver_sql("ALTER TABLE findings DROP COLUMN credential_match")
+            conn.exec_driver_sql("UPDATE crab_schema SET version=1")
+            conn.exec_driver_sql("UPDATE scans SET job_id=?", (job_id,))
+            conn.exec_driver_sql("UPDATE jobs SET scan_id=? WHERE id=?", (second, job_id))
+        self.assertEqual(schema_version(initialize(self.app.state.engine)), 2)
+        self.assertIsNone(self.ok("GET", f"/scans/{first}")["job_id"])
+        self.assertEqual(self.ok("GET", f"/scans/{second}")["job_id"], job_id)
+
     def test_incomplete_status_when_report_has_errors(self):
         report = fixture()
         report["errors"] = [{"reason": "timeout", "producer": "bandit"}]
@@ -416,7 +431,7 @@ class FindingTests(ServerCase):
         self.assertEqual(result["unchanged"], 11)
         for entry in head["imports"]:
             if entry["producer"] == removed["producer"]:
-                entry["status"] = "failed"
+                entry.update(status="failed", reason="timeout")
         partial = self.upload(report=head)["id"]
         result = self.ok("GET", f"/scans/{partial}/compare?base={base_id}")
         self.assertFalse(result["fixed"])
@@ -785,6 +800,16 @@ class UploadAuthorizationTests(ServerCase):
         self.assertEqual(seen, ["thread"])
         self.assertEqual(self.app.state.body_slots.value, 2)
 
+    def test_schema_validation_stops_at_the_first_error(self):
+        from jsonschema import ValidationError
+        def errors():
+            yield ValidationError("invalid", validator="type")
+            self.fail("validation continued after the first error")
+        with mock.patch.object(service, "_validator") as validator:
+            validator.return_value.iter_errors.return_value = errors()
+            with self.assertRaises(service.ApiError):
+                service.validate_report({})
+
     def test_slot_is_held_during_storage(self):
         self.project()
         worker = self.token(["worker"])
@@ -1070,6 +1095,29 @@ class PathSourceTests(ServerCase):
             self.assertTrue(safety.contained(os.path.join(real, "demo"), [alias]))
             self.assertFalse(safety.contained(os.path.join(alias, "escape"), [alias]))
             self.assertFalse(safety.contained(os.path.normpath("/elsewhere/demo"), [alias]))
+
+
+@unittest.skipUnless(os.environ.get("CRAB_TEST_POSTGRES"), "requires a disposable PostgreSQL database")
+class ConcurrentCompletionTests(ServerCase):
+    settings_overrides = {"database_url": os.environ.get("CRAB_TEST_POSTGRES")}
+
+    def test_simultaneous_retries_store_one_scan(self):
+        import asyncio
+        import httpx
+        self.project()
+        token = self.token(["worker"])
+        self.ok("POST", "/projects/demo/jobs", status=201, json={
+            "source": {"type": "path", "path": str(self.repos / "demo")}})
+        job = self.ok("POST", "/workers/claim", token, json={"worker": "pg-worker"})["job"]
+        async def complete_twice():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test") as client:
+                payload = {"worker": "pg-worker", "attempt": job["attempts"], "report": fixture()}
+                return await asyncio.gather(*(client.post(f"/api/v1/jobs/{job['id']}/complete", json=payload,
+                                               headers={"Authorization": f"Bearer {token}"}) for _ in range(2)))
+        first, second = asyncio.run(complete_twice())
+        self.assertEqual((first.status_code, second.status_code), (200, 200), (first.text, second.text))
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(self.ok("GET", "/projects/demo/scans")["total"], 1)
 
 
 class TokenLifecycleTests(ServerCase):

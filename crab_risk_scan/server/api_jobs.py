@@ -33,7 +33,6 @@ class HeartbeatBody(Body):
 class FailBody(HeartbeatBody):
     error: str = Field(min_length=1, max_length=service.ERROR_LIMIT)
     log: str | None = Field(None, max_length=4 * service.LOG_LIMIT)
-    worker: str | None = Field(None, max_length=64)
 
 
 def job_project(db, job):

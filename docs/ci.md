@@ -258,6 +258,8 @@ Reserve `CRAB_RESULTS` (default `crab-results`) for generated artifacts in the j
 
 Set `CRAB_TOKEN` as a masked CI/CD variable and `CRAB_SERVER_URL` and `CRAB_PROJECT` for connected mode. The scanner image runs as uid 10001. The GitLab Docker executor's default umask makes the checkout writable for it.
 
+On a cache miss, the GitLab job seeds its writable cache from the scanner image’s prepared databases in `/opt/crab/cache` when present. Build or supply a prefetched image for offline use.
+
 The cache key includes `CI_COMMIT_REF_PROTECTED`. Only branch pipelines on protected branches push the cache (`policy: pull-push`); merge request, unprotected and tag pipelines only pull it. `crab-scan` refuses to run when `CRAB_CACHE_DIR` is a symlink, is tracked by git or is not a directory, because the scanned repository would then supply the vulnerability databases.
 
 ## Azure Pipelines
