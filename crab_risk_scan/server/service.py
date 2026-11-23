@@ -372,6 +372,18 @@ def inside(path, roots):
     return contained(path, roots)
 
 
+def project_boundary(path, scan_roots):
+    """Map a stored grant to its canonical scan root without following links below the root."""
+    if path:
+        for root in scan_roots:
+            real_root = os.path.realpath(root)
+            if within(path, real_root):
+                return os.path.normpath(path)
+            if within(path, root):
+                return os.path.normpath(os.path.join(real_root, os.path.relpath(path, root)))
+    return None
+
+
 def validate_scan_path(value, scan_roots):
     """Admin-set project scan path: absolute, inside the server scan roots. Empty clears it."""
     if value is None or value == "":
@@ -419,9 +431,11 @@ def validate_source(source, settings, *, scan_path=None, confined=False):
             raise ApiError(422, "path sources are disabled; set CRAB_SCAN_ROOTS on the server")
         if confined and not scan_path:
             raise ApiError(422, "path sources need a project scan_path set by an admin")
-        if not inside(path, settings.scan_roots):
+        resolved = resolve_contained(path, settings.scan_roots)
+        if resolved is None:
             raise ApiError(422, "source.path is outside the allowed scan roots")
-        if confined and not inside(path, (scan_path,)):
+        boundary = project_boundary(scan_path, settings.scan_roots) if confined else None
+        if confined and (boundary is None or not within(resolved, boundary)):
             raise ApiError(422, "source.path is outside the project's scan_path")
         return {"type": "path", "path": path}
     if kind == "git":
@@ -496,8 +510,9 @@ def leased_source(source, scan_path, scan_roots):
     # Intersect the enqueue-time grant and the current one. A removed grant, disjoint
     # reassignment or changed symlink leaves the worker with no authorized directory.
     root = None
-    if scan_path and contained(scan_path, scan_roots):
-        original = source.get("root", scan_path)
+    original = project_boundary(source.get("root", scan_path), scan_roots)
+    scan_path = project_boundary(scan_path, scan_roots)
+    if scan_path and original and contained(scan_path, scan_roots):
         if within(scan_path, original):
             root = scan_path
         elif within(original, scan_path):

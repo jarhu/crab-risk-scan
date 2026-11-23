@@ -913,6 +913,20 @@ class PathSourceTests(ServerCase):
         self.assertEqual(self.path_job(self.repos / "demo" / ".." / "other", self.maintainer).status_code, 422)
         self.assertEqual(self.path_job(self.repos / "other").status_code, 201)
 
+    def test_source_below_configured_root_alias_accepts_old_and_canonical_grants(self):
+        alias = self.base / "repos-alias"
+        try:
+            alias.symlink_to(self.repos, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+        source = {"type": "path", "path": str(alias / "demo")}
+        canonical = os.path.realpath(self.repos / "demo")
+        settings = mock.Mock(scan_roots=(alias,))
+        for grant in (str(alias / "demo"), canonical):
+            with self.subTest(grant=grant):
+                self.assertEqual(service.validate_source(source, settings, scan_path=grant, confined=True), source)
+                self.assertEqual(service.leased_source(source, grant, (alias,))["root"], canonical)
+
     def test_maintainer_schedules_are_confined_at_creation_and_at_run_time(self):
         source = {"type": "path", "path": str(self.repos / "demo")}
         self.assertEqual(self.call("POST", "/projects/demo/schedules", self.maintainer,
