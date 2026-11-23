@@ -132,13 +132,41 @@ class CommandTests(Folder):
         self.assertTrue(all(Path(f).is_relative_to(self.target) and f.endswith(".sh") for f in files))
 
     def test_psscriptanalyzer(self):
-        ctx, (command,) = self.build("psscriptanalyzer")
+        manifest = self.base / "trusted" / "PSScriptAnalyzer.psd1"
+        ctx, (command,) = self.build("psscriptanalyzer", module_manifest=manifest)
         argv = command.argv
         self.assertIn("-NoProfile", argv)
         self.assertEqual(argv[argv.index("-File") + 1], str(engines.PSSA_SCRIPT))
         self.assertTrue(engines.PSSA_SCRIPT.is_file())
-        self.assertEqual(argv[-3:-1], [str(self.target), str(ctx.report)])
-        self.assertIn("PSAvoidUsingPlainTextForPassword", argv[-1].split(","))
+        self.assertEqual(argv[-5:-3], [str(self.target), str(ctx.report)])
+        self.assertIn("PSAvoidUsingPlainTextForPassword", argv[-3].split(","))
+        self.assertEqual(argv[-2:], ["-ModuleManifest", str(manifest)])
+
+    def test_pssa_probe_and_scan_use_only_the_installed_manifest(self):
+        version = engines.load_lock()["engines"]["psscriptanalyzer"]["version"]
+        relative = Path("PSScriptAnalyzer") / version / "PSScriptAnalyzer.psd1"
+        trusted = self.base / "tools" / "modules" / relative
+        shadow = self.target / relative
+        for path in (trusted, shadow):
+            path.parent.mkdir(parents=True)
+            path.write_text("@{}")
+        with mock.patch.dict(os.environ, {"CRAB_ENGINE_DIR": str(self.base / "tools/bin"),
+                                          "PSModulePath": str(self.target), "PSMODULEPATH": str(self.target)}):
+            manifest = engines.pssa_manifest(self.target)
+            self.assertEqual(manifest, trusted)
+            with mock.patch.object(engines, "probe", return_value=version) as probe:
+                self.assertEqual(engines.tool_version("psscriptanalyzer", "pwsh", target=self.target,
+                                                      module_manifest=manifest), version)
+                self.assertEqual(probe.call_args.kwargs["env"], {"CRAB_PSSA_MANIFEST": str(trusted)})
+            _, (command,) = self.build("psscriptanalyzer", module_manifest=manifest)
+            self.assertEqual(command.argv[-1], str(trusted))
+            self.assertNotIn("PSMODULEPATH", {k.upper() for k in engines.isolated_env(self.workspace())})
+            trusted.unlink()
+            try:
+                trusted.symlink_to(shadow)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            self.assertNotEqual(engines.pssa_manifest(self.target), shadow.resolve())
 
     def test_trivy_offline_flags(self):
         ctx, (command,) = self.build("trivy")
