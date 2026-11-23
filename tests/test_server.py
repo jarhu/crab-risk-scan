@@ -669,7 +669,8 @@ class WebUiTests(ServerCase):
         with mock.patch.object(Path, "is_file", side_effect=AssertionError("filesystem lookup")), \
                 mock.patch.object(Path, "resolve", side_effect=AssertionError("filesystem lookup")):
             for path in ("%2F%2Fexample.invalid/share", "%5C%5Cexample.invalid%5Cshare",
-                         "%2Fabsolute", "C%3Arelative", "assets/%2E%2E/other", "assets/NUL.txt"):
+                         "%2Fabsolute", "C%3Arelative", "assets/%2E%2E/other", "assets/NUL.txt",
+                         "assets/file%20", "assets/file."):
                 with self.subTest(path=path):
                     self.assertEqual(self.client.get("/" + path).status_code, 404)
 
