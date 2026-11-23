@@ -246,13 +246,15 @@ variables:
 
 | Job | Behaviour |
 |---|---|
-| `crab-scan` | Runs `ci --no-fail` and always exits 0 when a report exists. Publishes `artifacts:reports:codequality` and `artifacts:reports:sarif` plus the results folder. |
+| `crab-scan` | Runs `ci --no-fail` in a fresh output directory. A complete scan publishes Code Quality, SARIF and the results folder even when policy fails. An operational error stops the job with the scanner’s exit status. A missing gate report returns 2. |
 | `crab-gate` | Runs `crab-risk-scan gate crab-results/report.json` with the same policy and exceptions. Fails the pipeline on exit 1 or 2. |
 
 | Tier | Result |
 |---|---|
 | Free and Premium | The Code Quality report appears in merge request widgets and the pipeline. The SARIF report is stored as a job artifact only. |
 | Ultimate | The SARIF report also feeds the Security tab, the vulnerability report and security policies (GitLab 18.11 and later). GitLab ingests SARIF only from a job that succeeds, which is why the scan and the gate are separate jobs. |
+
+Reserve `CRAB_RESULTS` (default `crab-results`) for generated artifacts in the job checkout. Each scan discards previous contents before preparing the cache or running the scanner. Use a relative directory with ordinary parent directories.
 
 Set `CRAB_TOKEN` as a masked CI/CD variable and `CRAB_SERVER_URL` and `CRAB_PROJECT` for connected mode. The scanner image runs as uid 10001. The GitLab Docker executor's default umask makes the checkout writable for it.
 

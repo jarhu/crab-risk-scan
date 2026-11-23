@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from crab_risk_scan.engines import load_lock
 from test_reports import cli
 
 
@@ -49,6 +50,14 @@ class LiveEngineTests(unittest.TestCase):
             self.assertEqual({hit["path"] for hit in hits}, set(files))
             self.assertEqual(len(hits), len(files))
             self.assertTrue(all(hit["rule"].startswith("crab-") for hit in hits))
+
+    def test_pinned_powershell_module_scans_a_clean_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "hello.ps1").write_text("Write-Output 'hello'\n")
+            report = engine_run(self, root, "psscriptanalyzer", 0)
+            self.assertEqual(report["imports"][0]["producer_version"],
+                             load_lock()["engines"]["psscriptanalyzer"]["version"])
 
     def test_bandit_and_shellcheck(self):
         with tempfile.TemporaryDirectory() as tmp:

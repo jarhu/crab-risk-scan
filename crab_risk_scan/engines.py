@@ -168,20 +168,34 @@ def discover(tool, explicit=None, target=None):
     return None, "not_installed"
 
 
-def module_paths():
-    """PowerShell module folders: engines installed next to CRAB_ENGINE_DIR, then the user's modules."""
-    paths = []
-    configured = os.environ.get("CRAB_ENGINE_DIR")
-    if configured and Path(configured).is_absolute():
-        paths.append(Path(configured).parent / "modules")
+def pssa_manifest(target):
+    """Find the pinned manifest in an operator installation, outside the scanned directory."""
+    roots = []
+    engine_bin = os.environ.get("CRAB_ENGINE_DIR")
+    if engine_bin and Path(engine_bin).is_absolute():
+        roots.append(Path(engine_bin).parent / "modules")
     if os.name == "nt":
-        paths.append(Path.home() / "Documents" / "PowerShell" / "Modules")
+        roots.append(Path.home() / "Documents" / "PowerShell" / "Modules")
+        if program_files := os.environ.get("ProgramFiles"):
+            roots.append(Path(program_files) / "PowerShell" / "Modules")
     else:
-        data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-        paths.append(Path(data) / "powershell" / "Modules")
-    inherited = os.environ.get("PSMODULEPATH", "")
-    paths.extend(Path(p) for p in inherited.split(os.pathsep) if p and Path(p).is_absolute())
-    return [p for p in dict.fromkeys(paths) if p.is_dir()]
+        data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        roots.extend([data / "powershell" / "Modules", Path("/usr/local/share/powershell/Modules")])
+    version = load_lock()["engines"]["psscriptanalyzer"]["version"]
+    target = Path(target).resolve()
+    for root in roots:
+        if not root.is_absolute() or _inside(root, target):
+            continue
+        try:
+            module = root / "PSScriptAnalyzer" / version
+            manifest = module / "PSScriptAnalyzer.psd1"
+            resolved = manifest.resolve(strict=True)
+            if (manifest.is_file() and resolved == root.resolve() / manifest.relative_to(root)
+                    and not _inside(resolved, target) and not target.is_relative_to(resolved.parent)):
+                return resolved
+        except (OSError, RuntimeError):
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +434,7 @@ class Context:
     offline: bool
     image: str | None
     version: str | None
+    module_manifest: Path | None = None
 
 
 @dataclass
@@ -497,7 +512,8 @@ def build_psscriptanalyzer(ctx):
     argv = [str(ctx.executable), "-NoLogo", "-NoProfile", "-NonInteractive"]
     if os.name == "nt":
         argv += ["-ExecutionPolicy", "Bypass"]
-    return [Command(argv + ["-File", str(PSSA_SCRIPT), str(ctx.target), str(ctx.report), ",".join(PSSA_RULES)])]
+    return [Command(argv + ["-File", str(PSSA_SCRIPT), str(ctx.target), str(ctx.report), ",".join(PSSA_RULES),
+                           "-ModuleManifest", str(ctx.module_manifest)])]
 
 
 def build_trivy(ctx):
@@ -553,10 +569,6 @@ def env_osv(ctx):
     return {"OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY": str(ctx.cache_dir / "osv")}
 
 
-def env_pwsh(ctx):
-    return pwsh_env()
-
-
 @dataclass(frozen=True)
 class Engine:
     name: str
@@ -587,7 +599,7 @@ REGISTRY = {
                          exit_shellcheck, lambda files, options: bool(_shellcheck_files(files))),
     "psscriptanalyzer": Engine("psscriptanalyzer", "psscriptanalyzer", "psscriptanalyzer", "crab-pssa-v1",
                                build_psscriptanalyzer, exit_zero,
-                               lambda files, options: bool(_powershell_files(files)), env_pwsh),
+                               lambda files, options: bool(_powershell_files(files))),
     "trivy": Engine("trivy", "trivy", "trivy", "trivy-db", build_trivy, exit_zero,
                     lambda files, options: bool(ecosystems(files))),
     "trivy-image": Engine("trivy-image", "trivy-image", "trivy", "trivy-db", build_trivy_image, exit_zero,
@@ -619,18 +631,14 @@ def selected(selection):
     return [name for name in ENGINES if name in selection.split(",")]
 
 
-def pwsh_env():
-    paths = module_paths()
-    return {"PSModulePath": os.pathsep.join(map(str, paths))} if paths else {}
-
-
-def tool_version(tool, executable, *, target=None, cache_dir=None):
+def tool_version(tool, executable, *, target=None, cache_dir=None, module_manifest=None):
     """Detected version of an installed tool, or None."""
     if tool == "psscriptanalyzer":
-        script = ("$m = Get-Module -ListAvailable -Name PSScriptAnalyzer | Sort-Object Version -Descending | "
-                  "Select-Object -First 1; if ($m) { $m.Version.ToString() } else { exit 3 }")
+        if module_manifest is None:
+            return None
+        script = "(Import-PowerShellDataFile -LiteralPath $env:CRAB_PSSA_MANIFEST -ErrorAction Stop).ModuleVersion"
         return _first_version(probe([str(executable), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                                     script], target=target, env=pwsh_env()))
+                                     script], target=target, env={"CRAB_PSSA_MANIFEST": str(module_manifest)}))
     command = {"gitleaks": ["version"], "syft": ["version"]}.get(tool, ["--version"])
     return _first_version(probe([str(executable), *command], target=target))
 
@@ -715,13 +723,13 @@ def run_engine(engine, ctx, timeout):
     return ("partial" if "partial" in statuses else "complete"), None
 
 
-def _prepare(engine, options, target, files, cache_dir):
+def _prepare(engine, options, target, files, cache_dir, module_manifest=None):
     """Resolve one engine. Returns (meta, executable) or (meta with status and reason, None)."""
     meta = {"origin": "engine", "version": None, "rule_pack": engine.rule_pack}
     if not engine.applicable(files, options):
         return dict(meta, status="skipped", reason="not_applicable"), None
     executable, reason = discover(engine.tool, options.engine_paths.get(engine.tool), target)
-    version = tool_version(engine.tool, executable, target=target) if executable else None
+    version = tool_version(engine.tool, executable, target=target, module_manifest=module_manifest) if executable else None
     if version is None:
         # `auto` records missing engines as skipped; `all` and explicit names treat them as failures.
         status = "skipped" if options.engines == "auto" else "failed"
@@ -752,7 +760,8 @@ def run_engines(options, work_root):
     results = []
     for name in names:
         engine = REGISTRY[name]
-        meta, executable = _prepare(engine, options, target, files, cache_dir)
+        manifest = pssa_manifest(target) if engine.tool == "psscriptanalyzer" else None
+        meta, executable = _prepare(engine, options, target, files, cache_dir, manifest)
         if executable is not None and unsafe:
             meta, executable = dict(meta, status="failed", reason="work_dir_inside_target"), None
         if executable is None:
@@ -762,7 +771,7 @@ def run_engines(options, work_root):
         for sub in (work.home, work.tmp, work.cwd, work.output):
             sub.mkdir(mode=0o700)
         ctx = Context(name, executable, target, work, work.root / "report.json", files, cache_dir,
-                      options.offline, options.image, meta["version"])
+                      options.offline, options.image, meta["version"], manifest)
         status, reason = run_engine(engine, ctx, options.engine_timeout)
         meta["status"] = status
         if reason:
@@ -782,7 +791,8 @@ def describe(engine_paths=None):
     for tool in TOOLS:
         entry = lock.get(tool, {})
         path, reason = discover(tool, (engine_paths or {}).get(tool))
-        version = tool_version(tool, path) if path else None
+        manifest = pssa_manifest(Path.cwd()) if tool == "psscriptanalyzer" and path else None
+        version = tool_version(tool, path, module_manifest=manifest) if path else None
         if path is None:
             status = reason
         elif version is None:

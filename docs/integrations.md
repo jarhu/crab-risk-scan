@@ -65,7 +65,7 @@ Every engine run uses these controls:
 |---|---|---|
 | download | opengrep, gitleaks, shellcheck, trivy, osv-scanner, syft | Release asset downloaded with urllib and checked against the locked SHA-256 before use. Archives are extracted member by member. Absolute paths, `..`, drive letters and links are rejected. Executables go to `DIR/bin`. |
 | pip | bandit, checkov | A venv per engine in `DIR/venvs/<engine>` with a shim in `DIR/bin`. Packages come from the hash-locked requirement file named in the lock file ([`engines/`](../crab_risk_scan/engines)), installed with `--require-hashes --no-deps --only-binary :all:`. `python -I` and a private working directory keep the current directory off `sys.path`. Shims are a `#!/bin/sh` exec script on POSIX and a console launcher on Windows. |
-| module | psscriptanalyzer | Nupkg verified and extracted to `DIR/modules/PSScriptAnalyzer/1.24.0`. Scans add `CRAB_ENGINE_DIR/../modules` to `PSModulePath`. PowerShell 7 (`pwsh`) must be installed separately. |
+| module | psscriptanalyzer | Nupkg verified and extracted to `DIR/modules/PSScriptAnalyzer/1.24.0`. The version probe and scan use the same absolute manifest. CRAB checks the configured installation, then standard user and system module directories for the pinned version. It ignores inherited `PSModulePath`. PowerShell 7 (`pwsh`) must be installed separately. |
 
 Platforms: `linux-x86_64`, `linux-aarch64`, `darwin-x86_64`, `darwin-arm64`, `windows-x86_64`. Digests come from the GitHub release asset `digest` metadata. The PSScriptAnalyzer nupkg has no GitHub digest. Its SHA-256 was recorded after the file matched the PowerShell Gallery SHA-512 package hash.
 
@@ -103,7 +103,7 @@ Paths in imported reports are checked without touching the file system. An absol
 | `--gitleaks` | Gitleaks v8 JSON array | Secret values, matches and commit metadata are discarded |
 | `--checkov` | Checkov JSON block or array of framework blocks | Imports failed_checks and flags parsing errors |
 | `--shellcheck` | ShellCheck JSON array | Imports a security-relevant subset |
-| `--psscriptanalyzer` | JSON from the packaged exporter | `pwsh -NoProfile -File "$(dirname "$(crab-risk-scan rules)")/engines/psscriptanalyzer.ps1" "$TARGET" ps.json` |
+| `--psscriptanalyzer` | JSON from the packaged exporter | `pwsh -NoProfile -File "$(dirname "$(crab-risk-scan rules)")/engines/psscriptanalyzer.ps1" "$TARGET" ps.json -ModuleManifest "$TRUSTED_PSSA_MANIFEST"` |
 | `--sarif` | SARIF 2.1.0 from any producer | Normalized into findings by rule ID, level and location |
 
 A malformed or out-of-scope report produces an `invalid_report` error for that input and keeps results from the others.

@@ -5,9 +5,9 @@
 #   include:
 #     - remote: https://raw.githubusercontent.com/jarhu/crab-risk-scan/v0.3.0/integrations/gitlab-ci/crab.gitlab-ci.yml
 #
-# crab-scan always exits 0 so that GitLab ingests its SARIF (Ultimate) and Code Quality (all tiers)
-# reports. crab-gate re-evaluates the saved report with `crab-risk-scan gate` and fails the pipeline
-# when the policy fails (exit 1) or the scan was incomplete (exit 2).
+# A completed scan publishes fresh SARIF and Code Quality reports, including on policy violations.
+# An operational failure stops crab-scan. crab-gate evaluates the completed scan and returns exit 1
+# for a policy violation.
 
 variables:
   CRAB_IMAGE: ghcr.io/jarhu/crab-risk-scan:0.3.0
@@ -61,6 +61,31 @@ crab-scan:
       - $CRAB_CACHE_DIR
   script:
     - |
+      set -e
+      # GitLab collects report artifacts even on failure. Remove any previous artifact destination
+      # from collection before cache checks or the scanner can fail.
+      case "/$CRAB_RESULTS/" in
+        *//*|*/../*|*/./*|*/.[gG][iI][tT]/*) echo "CRAB_RESULTS must be a relative artifact directory."; exit 2 ;;
+      esac
+      stage=$(mktemp -d /tmp/crab-gitlab.XXXXXXXX)
+      trap 'rm -rf -- "$stage"' 0
+      parent=$(dirname -- "$CRAB_RESULTS")
+      linked_parent=
+      ancestor=$parent
+      while [ "$ancestor" != "." ]; do
+        if [ -L "$ancestor" ]; then linked_parent=$ancestor; fi
+        ancestor=$(dirname -- "$ancestor")
+      done
+      if [ -n "$linked_parent" ]; then
+        mv -- "$linked_parent" "$stage/previous-parent"
+        echo "Refusing a symlink in the artifact parent path."
+        exit 2
+      fi
+      if [ -e "$CRAB_RESULTS" ] || [ -L "$CRAB_RESULTS" ]; then
+        mv -- "$CRAB_RESULTS" "$stage/previous"
+      fi
+      mkdir -p -- "$parent"
+      mkdir -- "$stage/current"
       set --
       [ -n "$CRAB_POLICY" ] && set -- "$@" --policy "$CRAB_POLICY"
       [ -n "$CRAB_EXCEPTIONS" ] && set -- "$@" --exceptions "$CRAB_EXCEPTIONS"
@@ -72,21 +97,21 @@ crab-scan:
       # vulnerability databases. Refuse both; fail closed when git cannot answer.
       if [ -L "$CRAB_CACHE_DIR" ]; then
         echo "Refusing $CRAB_CACHE_DIR: it is a symlink."
-        exit 1
+        exit 2
       fi
       if ! tracked="$(git -c safe.directory="$CI_PROJECT_DIR" ls-files -- "$CRAB_CACHE_DIR")"; then
         echo "Refusing $CRAB_CACHE_DIR: git could not check whether it is tracked."
-        exit 1
+        exit 2
       fi
       if [ -n "$tracked" ]; then
         echo "Refusing $CRAB_CACHE_DIR: it is tracked in the repository. Remove it from git."
-        exit 1
+        exit 2
       fi
       if [ -d "$CRAB_CACHE_DIR" ]; then
         mv "$CRAB_CACHE_DIR" "$CRAB_WORK_CACHE"
       elif [ -e "$CRAB_CACHE_DIR" ]; then
         echo "Refusing $CRAB_CACHE_DIR: it is not a directory."
-        exit 1
+        exit 2
       else
         mkdir -p "$CRAB_WORK_CACHE"
       fi
@@ -96,16 +121,21 @@ crab-scan:
       status=0
       # CRAB_TOKEN (a masked CI/CD variable) is read from the environment in connected mode.
       # CRAB_EXTRA_ARGS is split on spaces on purpose.
-      crab-risk-scan ci "$CRAB_SCAN_PATH" --output-dir "$CRAB_RESULTS" --engines "$CRAB_ENGINES" \
-        --cache-dir "$CRAB_WORK_CACHE" --no-fail "$@" $CRAB_EXTRA_ARGS || status=$?
-      mv "$CRAB_WORK_CACHE" "$CRAB_CACHE_DIR"
-      if [ ! -s "$CRAB_RESULTS/report.json" ]; then
-        echo "CRAB did not produce a report (exit $status)."
-        exit 1
+      crab-risk-scan ci "$CRAB_SCAN_PATH" --engines "$CRAB_ENGINES" \
+        --cache-dir "$CRAB_WORK_CACHE" --no-fail "$@" $CRAB_EXTRA_ARGS --output-dir "$stage/current" || status=$?
+      mv "$CRAB_WORK_CACHE" "$CRAB_CACHE_DIR" || { [ "$status" -ne 0 ] || status=2; }
+      if [ "$status" -ne 0 ]; then
+        echo "CRAB scan failed (exit $status)."
+        exit "$status"
       fi
-      echo "CRAB scan finished with exit status $status. crab-gate enforces the policy."
+      if [ ! -s "$stage/current/report.json" ]; then
+        echo "CRAB scan produced no gate report."
+        exit 2
+      fi
+      mv -- "$stage/current" "$CRAB_RESULTS"
+      echo "CRAB scan completed. crab-gate enforces the policy."
   artifacts:
-    when: always
+    when: on_success
     expire_in: 30 days
     paths:
       - $CRAB_RESULTS/

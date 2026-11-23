@@ -233,7 +233,7 @@ class GitLabCacheTests(unittest.TestCase):
             "$CI_COMMIT_TAG": "pull",
         })
 
-    def run_scan(self, prepare):
+    def run_scan(self, prepare, *, scenario="clean", gate=False):
         bash = posix_bash()
         if not bash:
             self.skipTest("POSIX bash not available")
@@ -243,7 +243,17 @@ class GitLabCacheTests(unittest.TestCase):
             project, bin_dir = tmp_path / "project", tmp_path / "bin"
             project.mkdir()
             bin_dir.mkdir()
-            write_stub(bin_dir, "crab-risk-scan", 'mkdir -p "$CRAB_RESULTS" && echo "{}" > "$CRAB_RESULTS/report.json"\n')
+            stub = """\
+if [ "$SCENARIO" = partial ]; then
+    while [ "$1" != "--output-dir" ] && [ "$#" -gt 1 ]; do shift; done
+    test -d "$2" && test ! -e "$2/report.json" || exit 2
+    echo partial > "$2/report.json"
+    exit 2
+fi
+if [ "$SCENARIO" = missing ]; then exit 0; fi
+exec "$CRAB_TEST_PYTHON" -m crab_risk_scan "$@"
+"""
+            write_stub(bin_dir, "crab-risk-scan", stub)
             prepare(project)
             env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                        CI_PROJECT_DIR=project.as_posix(), CRAB_CACHE_DIR=".crab-cache",
@@ -251,9 +261,21 @@ class GitLabCacheTests(unittest.TestCase):
                        CRAB_SCAN_PATH=".", CRAB_ENGINES="auto", CRAB_UPDATE_DB="false", CRAB_POLICY="",
                        CRAB_EXCEPTIONS="", CRAB_FAIL_ON="", CRAB_SBOM="false", CRAB_SERVER_URL="",
                        CRAB_PROJECT="", CRAB_EXTRA_ARGS="", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+            if scenario == "policy":
+                shutil.copyfile(ROOT / "examples/demo/client.py", project / "client.py")
+            env.update(SCENARIO=scenario, CRAB_TEST_PYTHON=shell_path(sys.executable),
+                       PYTHONPATH=str(ROOT), CRAB_ENGINES="unknown" if scenario == "failure" else "none",
+                       CRAB_FAIL_ON="low")
             result = subprocess.run([bash, "-c", script], cwd=project, env=env, capture_output=True, text=True,
                                     timeout=60)
-            return result, (project / ".crab-cache").exists(), (project / "crab-results" / "report.json").exists()
+            report = project / "crab-results" / "report.json"
+            if gate:
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(report.is_file())
+                script = block_after(self.text.split("\ncrab-gate:\n", 1)[1], r"^    - \|$", 6)
+                result = subprocess.run([bash, "-c", script], cwd=project, env=env, capture_output=True,
+                                        text=True, timeout=60)
+            return result, (project / ".crab-cache").exists(), report.exists()
 
     @staticmethod
     def git(project, *args):
@@ -277,6 +299,27 @@ class GitLabCacheTests(unittest.TestCase):
         self.assertTrue(cache_back)
         self.assertTrue(report)
 
+    def prepare_stale(self, project):
+        self.init(project)
+        old = project / "crab-results"
+        old.mkdir()
+        (old / "report.json").write_text("stale")
+        self.git(project, "add", "-f", "crab-results/report.json")
+
+    def test_gate_uses_current_scan_for_clean_and_policy_results(self):
+        for scenario, expected in (("clean", 0), ("policy", 1)):
+            with self.subTest(scenario=scenario):
+                run, _, report = self.run_scan(self.prepare_stale, scenario=scenario, gate=True)
+                self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
+                self.assertTrue(report)
+
+    def test_failed_scan_never_publishes_old_or_partial_report(self):
+        for scenario in ("failure", "partial", "missing"):
+            with self.subTest(scenario=scenario):
+                run, _, report = self.run_scan(self.prepare_stale, scenario=scenario)
+                self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+                self.assertFalse(report)
+
     def test_tracked_cache_is_refused(self):
         def prepare(project):
             self.init(project)
@@ -286,7 +329,7 @@ class GitLabCacheTests(unittest.TestCase):
             self.git(project, "commit", "-q", "-m", "cache")
 
         result, cache_back, report = self.run_scan(prepare)
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 2)
         self.assertIn("tracked", result.stdout)
         self.assertTrue(cache_back)
         self.assertFalse(report)
@@ -302,7 +345,7 @@ class GitLabCacheTests(unittest.TestCase):
                 self.skipTest(f"symlinks unavailable: {error}")
 
         result, _, report = self.run_scan(prepare)
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 2)
         self.assertIn("symlink", result.stdout)
         self.assertFalse(report)
 
@@ -311,7 +354,7 @@ class GitLabCacheTests(unittest.TestCase):
             (project / ".crab-cache").mkdir()
 
         result, cache_back, report = self.run_scan(prepare)
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 2)
         self.assertTrue(cache_back)
         self.assertFalse(report)
 
