@@ -254,9 +254,13 @@ def initialize(engine):
             # Preserve historical scans. Keep the job's selected result when early servers
             # recorded duplicates, and detach only the redundant associations.
             session.connection().exec_driver_sql("""
-                UPDATE scans SET job_id = NULL WHERE job_id IS NOT NULL AND id <> (
-                    SELECT COALESCE(MAX(CASE WHEN s.id = j.scan_id THEN s.id END), MIN(s.id))
-                    FROM scans s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.job_id = scans.job_id)
+                WITH duplicates AS (
+                    SELECT s.job_id, COALESCE(MAX(CASE WHEN s.id = j.scan_id THEN s.id END), MIN(s.id)) AS keep_id
+                    FROM scans s LEFT JOIN jobs j ON j.id = s.job_id
+                    WHERE s.job_id IS NOT NULL GROUP BY s.job_id HAVING COUNT(*) > 1
+                )
+                UPDATE scans SET job_id = NULL
+                WHERE job_id IN (SELECT job_id FROM duplicates) AND id NOT IN (SELECT keep_id FROM duplicates)
             """)
             session.connection().exec_driver_sql(
                 "ALTER TABLE findings ADD COLUMN credential_match BOOLEAN DEFAULT FALSE NOT NULL")

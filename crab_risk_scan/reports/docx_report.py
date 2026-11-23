@@ -322,12 +322,15 @@ def write_severity(w, model):
     if comparison:
         w.paragraph(f"Base revision: {comparison.get('base_revision') or 'not recorded'}. New: {comparison['new']}. "
                     f"Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}. Unverified: {len(comparison.get('unverified', []))}.")
-        if comparison["fixed"]:
+        for key, label in (("fixed", "Fixed"), ("unverified", "Missing comparable coverage")):
+            if not comparison.get(key):
+                continue
+            w.paragraph(label, bold=True)
             w.table(["Severity", "Rule", "Location", "Fingerprint"],
                     [[summary.SEVERITY_LABELS.get(f["severity"], f["severity"]), f"{f['producer']}/{f['rule']}",
                       (f.get("path") or "") + (f":{f['line']}" if f.get("line") else "")
                       if f.get("path") else (summary.package_ref(f) or "not located"),
-                      f["fingerprint"][:12]] for f in comparison["fixed"]])
+                      f["fingerprint"][:12]] for f in comparison[key]])
     else:
         w.paragraph("No base report was given, so new and fixed findings are not computed.")
 
@@ -495,7 +498,10 @@ def check_template(path, package):
             if ACTIVE_PARTS.search(entry.filename):
                 raise ValueError(f"DOCX template contains macros or embedded objects: {path.name}")
             if entry.filename.lower().endswith(".rels"):
-                check_relationships(archive.read(entry), path.name)
+                try:
+                    check_relationships(archive.read(entry), path.name)
+                except (zipfile.BadZipFile, RuntimeError, OSError):
+                    raise ValueError(f"Unreadable DOCX relationship part: {path.name}") from None
 
 
 def open_template(docx, template):

@@ -440,6 +440,17 @@ class FindingTests(ServerCase):
         foreign = self.upload("other")["id"]
         self.assertEqual(self.call("GET", f"/scans/{head_id}/compare?base={foreign}").status_code, 422)
 
+    def test_old_report_credentials_ignore_cross_scan_exceptions(self):
+        report = fixture()
+        secret = next(f for f in report["findings"] if f["category"] == "secrets")
+        secret.pop("credential_identity", None)
+        scan = self.upload(report=report)["id"]
+        self.ok("PUT", f"/projects/demo/exceptions/{secret['fingerprint']}",
+                json={"status": "accepted", "reason": "Reviewed in a different scan"})
+        rows = self.ok("GET", f"/scans/{scan}/findings?category=secrets&status=open")["items"]
+        self.assertEqual([row["fingerprint"] for row in rows], [secret["fingerprint"]])
+        self.assertFalse(rows[0]["suppressed"])
+
     def test_exceptions_round_trip_and_export(self):
         secret = fingerprint("aws-access-token")
         body = {"status": "accepted", "reason": "Rotated", "expires": "2999-01-01", "ticket": "SEC-1"}
