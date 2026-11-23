@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy import func, not_, or_, select
 
+from ..policy import comparable_producers, verified_absence
 from . import service
 from .auth import Paging, Principal, get_db, get_principal, load_project
 from .db import Finding, Project, ProjectException, Scan, utcnow
@@ -116,12 +117,14 @@ def compare(scan_id: int, base: int = Query(...), db=Depends(get_db), principal:
     base_prints = {finding["fingerprint"] for finding, _ in previous}
     keys = {project.id: project.key}
     base_summary, head_summary = service.summaries(db, [base_scan, head_scan], keys)
+    covered = comparable_producers(service.unpack(base_scan.report_gz), service.unpack(head_scan.report_gz))
+    missing = [(f, row) for f, row in previous if f["fingerprint"] not in head_prints]
     return {
         "base": base_summary, "head": head_summary,
         "new": [service.finding_item(finding, row, day) for finding, row in head
                 if finding["fingerprint"] not in base_prints],
-        "fixed": [service.finding_item(finding, row, day) for finding, row in previous
-                  if finding["fingerprint"] not in head_prints],
+        "fixed": [service.finding_item(f, row, day) for f, row in missing if verified_absence(f, covered)],
+        "unverified": [service.finding_item(f, row, day) for f, row in missing if not verified_absence(f, covered)],
         "unchanged": sum(1 for finding, _ in head if finding["fingerprint"] in base_prints),
     }
 

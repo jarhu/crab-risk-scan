@@ -133,6 +133,7 @@ steps:
         fi
         echo "##vso[task.setvariable variable=CRAB_RESULTS]$CRAB_RESULTS"
         echo "##vso[task.setvariable variable=CRAB_SCAN_STATUS]$status"
+        if [ "$status" -ne 0 ]; then exit "$status"; fi
         if [ ! -s "$CRAB_RESULTS/report.json" ]; then
           echo "##vso[task.logissue type=error]CRAB did not produce a report (exit $status)."
           exit 2

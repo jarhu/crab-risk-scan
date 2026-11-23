@@ -1,5 +1,6 @@
 """Validation shared by the saved-report adapters, fingerprints and package identities."""
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -227,37 +228,37 @@ class SourceLines:
             return None
         if len(raw) > SOURCE_LIMIT:
             return None
-        return re.split(r"\r?\n", raw.decode("utf-8", "replace").removeprefix("\ufeff"))
+        return re.split(r"\r?\n", raw.decode("utf-8", "surrogateescape").removeprefix("\ufeff"))
 
     def content_hash(self, path, start, end):
         lines = self.lines(path)
         if lines is None or start is None or end is None or end < start or end > len(lines):
             return None
         selected = "\n".join(" ".join(line.split()) for line in lines[start - 1:end])
-        return hashlib.sha256(selected.encode("utf-8")).hexdigest()
+        return hashlib.sha256(selected.encode("utf-8", "surrogateescape")).hexdigest()
 
 
 # Hard-coded password rules whose flagged lines hold a credential, like secret detector matches.
 CREDENTIAL_RULES = frozenset({("bandit", "B105"), ("bandit", "B106"), ("bandit", "B107")})
-# A credential fingerprint carries 16 bits of the flagged lines' hash: a changed value yields a new
-# fingerprint (so an exception for a placeholder never covers a real key), while 16 bits are far too
-# few to confirm a guessed secret.
-CREDENTIAL_TAG = 4
-
-
 def credential(hit):
     return hit.get("category") == "secrets" or (hit["producer"], hit["rule"]) in CREDENTIAL_RULES
+
+
+def exception_eligible(hit):
+    return not credential(hit) or hit.get("credential_identity") == "hmac-sha256-v1"
 
 
 def assign_fingerprints(findings, root, sources=None):
     """Fingerprint source findings of one input batch.
 
     Source: [producer, rule, path, content_hash, occurrence, identity].
-    Credentials (secrets, hard-coded passwords): [producer, rule, path, change_tag, occurrence], where
-    the change tag is the first 16 bits of the content hash, or null when the file is unreadable.
+    Credential exceptions require a project key and readable source lines. Public tracking
+    fingerprints without that evidence never authorize a suppression.
     Findings that already carry a fingerprint (dependency, container) keep it.
     """
     sources = sources or SourceLines(root)
+    configured = os.environ.get("CRAB_CREDENTIAL_KEY", "")
+    key = bytes.fromhex(configured) if re.fullmatch(r"[0-9a-fA-F]{64}", configured) else None
     pending = [(i, f) for i, f in enumerate(findings) if "fingerprint" not in f]
 
     def position(item):
@@ -268,10 +269,17 @@ def assign_fingerprints(findings, root, sources=None):
     counts = {}
     for _, hit in sorted(pending, key=position):
         identity = hit.pop("_identity", None)
-        digest = sources.content_hash(hit["path"], hit.get("line"), hit.get("end_line") or hit.get("line"))
+        start, end = hit.get("line"), hit.get("end_line") or hit.get("line")
         if credential(hit):
-            anchor = (hit["producer"], hit["rule"], hit["path"], digest[:CREDENTIAL_TAG] if digest else None)
+            lines = sources.lines(hit["path"]) if key else None
+            tag = None
+            if lines is not None and start and end and 1 <= start <= end <= len(lines):
+                material = "\n".join(lines[start - 1:end]).encode("utf-8", "surrogateescape")
+                tag = hmac.digest(key, material, "sha256").hex()
+                hit["credential_identity"] = "hmac-sha256-v1"
+            anchor = (hit["producer"], hit["rule"], hit["path"], tag)
         else:
+            digest = sources.content_hash(hit["path"], start, end)
             anchor = (hit["producer"], hit["rule"], hit["path"], digest, json.dumps(identity))
         occurrence = counts.get(anchor, 0)
         counts[anchor] = occurrence + 1

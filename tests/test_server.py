@@ -295,7 +295,6 @@ class UploadTests(ServerCase):
 
     def test_history_and_dashboard_load_only_summary_columns(self):
         from sqlalchemy import event
-        self.project()
         scan_id = self.upload()["id"]
         statements = []
         def capture(conn, cursor, statement, parameters, context, executemany):
@@ -415,6 +414,13 @@ class FindingTests(ServerCase):
         self.assertEqual([f["fingerprint"] for f in result["new"]], ["a" * 64])
         self.assertEqual([f["fingerprint"] for f in result["fixed"]], [removed["fingerprint"]])
         self.assertEqual(result["unchanged"], 11)
+        for entry in head["imports"]:
+            if entry["producer"] == removed["producer"]:
+                entry["status"] = "failed"
+        partial = self.upload(report=head)["id"]
+        result = self.ok("GET", f"/scans/{partial}/compare?base={base_id}")
+        self.assertFalse(result["fixed"])
+        self.assertEqual([f["fingerprint"] for f in result["unverified"]], [removed["fingerprint"]])
         self.project("other", "Other")
         foreign = self.upload("other")["id"]
         self.assertEqual(self.call("GET", f"/scans/{head_id}/compare?base={foreign}").status_code, 422)
@@ -549,11 +555,26 @@ class JobTests(ServerCase):
         detail = self.ok("GET", f"/jobs/{job['id']}")
         self.assertEqual((detail["status"], detail["scan_id"], detail["attempts"], detail["log"]),
                          ("succeeded", done["scan_id"], 1, "scan finished"))
+        self.assertEqual(self.ok("POST", f"/jobs/{job['id']}/complete", self.worker,
+                                 json={"report": fixture(), "worker": "w1", "attempt": 1}), done)
+        self.assertEqual(self.ok("GET", "/projects/demo/scans")["total"], 1)
         self.assertEqual(self.call("POST", f"/jobs/{job['id']}/complete", self.worker,
                                    json={"report": fixture()}).status_code, 409)
         workers = self.ok("GET", "/workers")
         self.assertEqual([(w["name"], w["active"], w["current_job"]) for w in workers["items"]],
                          [("w1", True, None), ("w2", True, None)])
+
+    def test_expiry_and_reassignment_to_same_worker_reject_old_claim(self):
+        job = self.job()
+        self.claim()
+        self.expire(job["id"])
+        path = f"/jobs/{job['id']}/complete"
+        body = {"worker": "w1", "attempt": 1, "report": fixture()}
+        self.assertEqual(self.call("POST", path, self.worker, json=body).status_code, 409)
+        self.claim()
+        self.assertEqual(self.call("POST", path, self.worker, json=body).status_code, 409)
+        self.ok("POST", path, self.worker, json={**body, "attempt": 2})
+        self.assertEqual(self.ok("GET", "/projects/demo/scans")["total"], 1)
 
     def test_git_jobs_go_only_to_git_workers(self):
         git_job = self.job({"type": "git", "url": "https://example.com/r.git", "ref": "main"})

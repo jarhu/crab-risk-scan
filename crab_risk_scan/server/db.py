@@ -8,7 +8,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utcnow():
@@ -131,6 +131,7 @@ class Finding(Base):
     package_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     package_purl: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_new: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    credential_match: Mapped[bool] = mapped_column(Boolean, default=False)
     embedded_suppressed: Mapped[bool] = mapped_column(Boolean)
     embedded_expires: Mapped[str | None] = mapped_column(String(10), nullable=True)
     data: Mapped[str] = mapped_column(Text)
@@ -248,6 +249,20 @@ def initialize(engine):
         if info is not None and info.version > SCHEMA_VERSION:
             raise RuntimeError(f"database schema {info.version} is newer than this CRAB release "
                                f"(schema {SCHEMA_VERSION}); upgrade crab-risk-scan")
+        if info is not None and info.version < 2:
+            # Preserve historical scans. Keep the job's selected result when early servers
+            # recorded duplicates, and detach only the redundant associations.
+            session.execute(select(SchemaInfo).where(SchemaInfo.id == 1).with_for_update())
+            session.connection().exec_driver_sql("""
+                UPDATE scans SET job_id = NULL WHERE job_id IS NOT NULL AND id <> (
+                    SELECT COALESCE(MAX(CASE WHEN s.id = j.scan_id THEN s.id END), MIN(s.id))
+                    FROM scans s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.job_id = scans.job_id)
+            """)
+            session.connection().exec_driver_sql(
+                "ALTER TABLE findings ADD COLUMN credential_match BOOLEAN DEFAULT FALSE NOT NULL")
+            info.version = 2
+        session.connection().exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_scans_job ON scans (job_id)")
+        session.commit()
     return factory
 
 

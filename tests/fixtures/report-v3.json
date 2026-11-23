@@ -107,6 +107,7 @@
       "fingerprint": "9ff6cbee0ed3bf31ff19e89d812756371bf6cc184aff9da64f471a04b106d71d",
       "producer": "gitleaks",
       "producer_version": "8.28.0",
+      "credential_identity": "hmac-sha256-v1",
       "rule_pack": "gitleaks-default",
       "module": "Sniffer",
       "category": "secrets",

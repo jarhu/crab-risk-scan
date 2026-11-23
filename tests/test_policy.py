@@ -243,6 +243,10 @@ class EvaluationTests(unittest.TestCase):
         new, = [f for f in report["findings"] if f["new"]]
         self.assertEqual(new["rule"], "CRAB-PY-001")
         self.assertEqual(report["policy"]["violations"], [{"gate": "severity", "count": 1}])
+        other = self.save("other.json", dict(base_report, target="different-project"))
+        unverified = self.run_collect(new_since=other, policy=policy)["comparison"]
+        self.assertEqual(unverified["fixed"], [])
+        self.assertEqual(unverified["unverified"], comparison["fixed"])
         bad = self.save("bad.json", {"schema_version": 2, "findings": []})
         report = self.run_collect(new_since=bad)
         self.assertIn({"reason": "invalid_comparison_base"}, report["errors"])

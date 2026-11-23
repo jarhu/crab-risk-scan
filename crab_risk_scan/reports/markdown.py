@@ -108,7 +108,7 @@ def comparison_lines(model):
     if not comparison:
         return ["No base report was given, so new and fixed findings are not computed.", ""]
     lines = [f"Base revision: {esc(comparison.get('base_revision') or 'not recorded')}. "
-             f"New: {comparison['new']}. Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}.", ""]
+             f"New: {comparison['new']}. Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}. Unverified: {len(comparison.get('unverified', []))}.", ""]
     if comparison["fixed"]:
         rows = []
         for fixed in comparison["fixed"]:

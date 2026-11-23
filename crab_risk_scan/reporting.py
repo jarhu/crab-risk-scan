@@ -124,7 +124,8 @@ def collect(local, *, root, inputs=(), run_manifest=None, revision=None, branch=
             continue
         if status == "failed" or path is None:
             entry["reason"] = identifier(meta.get("reason")) or "producer_failed"
-            errors.append({"input": index, "producer": name, "reason": "producer_failed"})
+            errors.append({"input": index, "producer": name,
+                           "reason": "inventory_truncated" if entry["reason"] == "inventory_truncated" else "producer_failed"})
             continue
         try:
             batch = ADAPTERS[name](load_json(path), root)

@@ -365,15 +365,15 @@ def inventory(root):
             path = Path(folder) / name
             if path.is_symlink():
                 continue
+            if len(files.paths) >= FILE_LIMIT:
+                files.truncated = True
+                return files
             rel = path.relative_to(root).as_posix()
             files.paths.append(rel)
             files.names.add(name)
             files.suffixes.add(PurePosixPath(name).suffix.lower())
             if name.startswith("Dockerfile") or name.endswith(".Dockerfile"):
                 files.names.add("Dockerfile")
-            if len(files.paths) >= FILE_LIMIT:
-                files.truncated = True
-                return files
     return files
 
 
@@ -760,6 +760,10 @@ def run_engines(options, work_root):
     results = []
     for name in names:
         engine = REGISTRY[name]
+        if files.truncated and name != "trivy-image":
+            results.append((engine.producer, None, {"origin": "engine", "status": "failed",
+                            "reason": "inventory_truncated", "rule_pack": engine.rule_pack}))
+            continue
         manifest = pssa_manifest(target) if engine.tool == "psscriptanalyzer" else None
         meta, executable = _prepare(engine, options, target, files, cache_dir, manifest)
         if executable is not None and unsafe:

@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__, enrich
-from .evidence import CATEGORIES, INVALID, LEVELS, fingerprint, load_json, purl_key, text, token
+from .evidence import CATEGORIES, INVALID, LEVELS, exception_eligible, fingerprint, load_json, purl_key, text, token
 from .triage import groups, relink
 
 POLICY_LIMIT = 1024 * 1024
@@ -28,7 +28,7 @@ FINDING_ORDER = ("fingerprint", "producer", "producer_version", "rule_pack", "mo
                  "severity", "original_severity", "message", "path", "line", "end_line", "column", "end_column",
                  "cwe", "help_uri", "confidence", "resource", "framework", "byte_offset", "end_byte_offset",
                  "package", "manifest", "image_digest", "aliases", "risk_type", "fixed_version", "cvss", "epss",
-                 "kev", "license", "inputs", "inventory_components", "new", "suppressed", "exception")
+                 "kev", "license", "inputs", "inventory_components", "new", "credential_identity", "suppressed", "exception")
 REPORT_ORDER = ("schema_version", "tool", "target", "revision", "branch", "repository", "files_scanned",
                 "imports", "findings", "groups", "inventory", "comparison", "policy", "errors")
 V1_MESSAGE = ("exceptions file version 1 (the 0.2 baseline) is not supported: fingerprints changed with "
@@ -230,6 +230,36 @@ def fixed_entry(hit):
     return entry
 
 
+def comparable_producers(base, head):
+    """Producers with evidence of equivalent scope and successful head coverage."""
+    if (not head.get("target") or base.get("target") != head["target"]
+            or base.get("repository") != head.get("repository")
+            or head.get("policy", {}).get("disabled_findings")
+            or any(not e.get("producer") and not e.get("path") for e in head["errors"])):
+        return set()
+    blocked = {e.get("producer", "crab") for e in head["errors"]}
+    covered = set()
+    if base.get("tool") == head.get("tool") and "crab" not in blocked:
+        covered.add("crab")
+    for producer in {entry["producer"] for entry in head["imports"]} - blocked:
+        old = [e for e in base.get("imports", []) if e["producer"] == producer]
+        new = [e for e in head["imports"] if e["producer"] == producer]
+        # Saved reports, image names and multi-input imports lack a comparable target manifest.
+        if producer == "trivy-image" or len(old) != 1 or len(new) != 1:
+            continue
+        a, b = old[0], new[0]
+        if (a["origin"] == b["origin"] == "engine" and a["status"] == b["status"] == "complete"
+                and a.get("rule_pack") == b.get("rule_pack") and a.get("producer_version") == b.get("producer_version")
+                and (a.get("targets") is None or (b.get("targets") or 0) >= a["targets"])):
+            covered.add(producer)
+    return covered
+
+
+def verified_absence(finding, covered):
+    return (finding["producer"] in covered and finding["rule"] != LICENSE_RULE
+            and finding["category"] != "container")
+
+
 def load_base(value):
     """Return (base_revision, {fingerprint: fixed entry}) from a schema-3 base report."""
     try:
@@ -241,7 +271,7 @@ def load_base(value):
         for hit in doc["findings"]:
             entry = fixed_entry(hit)
             entries.setdefault(entry["fingerprint"], entry)
-        return revision, entries
+        return revision, entries, doc
     except INVALID:
         raise PolicyError("invalid_comparison_base",
                           "the --new-since base must be a schema 3 CRAB JSON report") from None
@@ -435,7 +465,7 @@ def evaluate(report, *, policy=None, exceptions=None, fail_on=None, new_since=No
     matched = set()
     for hit in kept:
         hit.pop("exception", None)
-        entry = entries.get(hit["fingerprint"])
+        entry = entries.get(hit["fingerprint"]) if exception_eligible(hit) else None
         hit["suppressed"] = bool(entry) and hit["fingerprint"] not in expired
         if entry:
             matched.add(hit["fingerprint"])
@@ -445,13 +475,18 @@ def evaluate(report, *, policy=None, exceptions=None, fail_on=None, new_since=No
 
     # 4. Comparison with a base report.
     if "base" in loaded:
-        base_revision, base = loaded["base"]
+        base_revision, base, base_report = loaded["base"]
+        covered = comparable_producers(base_report, report)
         current = {f["fingerprint"] for f in kept}
         for hit in kept:
             hit["new"] = hit["fingerprint"] not in base
-        fixed = sorted((e for k, e in base.items() if k not in current), key=sort_key)
+        missing = sorted((e for k, e in base.items() if k not in current), key=sort_key)
+        fixed, unverified = [], []
+        for entry in missing:
+            rule = f"{entry['producer']}/{entry['rule']}"
+            (fixed if verified_absence(entry, covered) and rule not in rules.disabled else unverified).append(entry)
         report["comparison"] = {"base_revision": base_revision, "new": sum(f["new"] for f in kept),
-                                "unchanged": sum(not f["new"] for f in kept), "fixed": fixed}
+                                "unchanged": sum(not f["new"] for f in kept), "fixed": fixed, "unverified": unverified}
     elif "comparison" in report:
         report["comparison"]["new"] = sum(bool(f.get("new")) for f in kept)
         report["comparison"]["unchanged"] = sum(not f.get("new") for f in kept)

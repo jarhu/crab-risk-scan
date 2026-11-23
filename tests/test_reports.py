@@ -132,6 +132,17 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn("help_uri", second)
             self.assertNotIn("fixed_version", second)
 
+    def test_osv_fixed_matches_the_installed_release_line(self):
+        package = {"name": "demo", "ecosystem": "npm"}
+        events = [{"fixed": "2.1.0"}, {"introduced": "0"}, {"fixed": "1.3.0"},
+                  {"introduced": "2.0.0-beta.1"}]
+        advisory = {"affected": [{"package": package, "ranges": [{"type": "SEMVER", "events": events}]}]}
+        for version, expected in (("1.2.0", "1.3.0"), ("1.3.0", None), ("2.0.0-beta.2", "2.1.0"),
+                                  ("2.1.0", None), ("unknown", None)):
+            self.assertEqual(adapters.osv_fixed(advisory, dict(package, version=version)), expected)
+        advisory["affected"][0]["ranges"][0]["type"] = "GIT"
+        self.assertIsNone(adapters.osv_fixed(advisory, dict(package, version="1.2.0")))
+
     def test_malicious_osv_advisory_is_critical(self):
         # Regression: docs/gap-analysis.md section 2, MAL-* advisories had severity unknown.
         with tempfile.TemporaryDirectory() as tmp:

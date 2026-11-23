@@ -134,6 +134,7 @@ export interface Comparison {
   new: number;
   unchanged: number;
   fixed: FixedFinding[];
+  unverified?: FixedFinding[];
 }
 
 export interface ScanDetail extends ScanSummary {
@@ -200,6 +201,7 @@ export interface CompareResult {
   head: ScanSummary;
   new: Finding[];
   fixed: Finding[];
+  unverified?: Finding[];
   unchanged: number;
 }
 

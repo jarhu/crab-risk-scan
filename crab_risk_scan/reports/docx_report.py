@@ -321,7 +321,7 @@ def write_severity(w, model):
     w.heading("Comparison", 2)
     if comparison:
         w.paragraph(f"Base revision: {comparison.get('base_revision') or 'not recorded'}. New: {comparison['new']}. "
-                    f"Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}.")
+                    f"Unchanged: {comparison['unchanged']}. Fixed: {len(comparison['fixed'])}. Unverified: {len(comparison.get('unverified', []))}.")
         if comparison["fixed"]:
             w.table(["Severity", "Rule", "Location", "Fingerprint"],
                     [[summary.SEVERITY_LABELS.get(f["severity"], f["severity"]), f"{f['producer']}/{f['rule']}",

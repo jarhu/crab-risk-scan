@@ -312,7 +312,54 @@ def purl_for(value, package):
     return value
 
 
+def semver_key(value):
+    """SemVer precedence, excluding build metadata. Invalid versions have no usable ordering."""
+    if not isinstance(value, str) or len(value) > 256:
+        return None
+    number = r"(0|[1-9][0-9]*)"
+    identifier = r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*"
+    match = re.fullmatch(rf"{number}\.{number}\.{number}(?:-({identifier}))?(?:\+{identifier})?", value)
+    if not match:
+        return None
+    major, minor, patch, prerelease = match.groups()
+    parts = []
+    for part in prerelease.split(".") if prerelease else ():
+        if part.isdigit() and len(part) > 1 and part[0] == "0":
+            return None
+        parts.append((0, int(part)) if part.isdigit() else (1, part))
+    return int(major), int(minor), int(patch), prerelease is None, tuple(parts)
+
+
+def osv_intervals(span):
+    events = []
+    for event in span.get("events") or []:
+        if not isinstance(event, dict) or len(event) != 1:
+            return []
+        kind, value = next(iter(event.items()))
+        key = (-1,) if kind == "introduced" and value == "0" else semver_key(value)
+        if key is None or kind not in {"introduced", "fixed", "last_affected", "limit"}:
+            return []
+        events.append((key, kind, value))
+    intervals = []
+    start = None
+    for key, kind, value in sorted(events):
+        if kind == "introduced" and start is None:
+            start = key
+        elif kind != "introduced" and start is not None:
+            intervals.append((start, key, kind, value))
+            start = None
+        else:
+            return []
+    if start is not None:
+        intervals.append((start, None, None, None))
+    return intervals
+
+
 def osv_fixed(advisory, pkg):
+    installed = semver_key(pkg["version"])
+    if installed is None:
+        return None
+    intervals, affected_versions = [], set()
     for affected in advisory.get("affected") or []:
         if not isinstance(affected, dict):
             continue
@@ -320,11 +367,26 @@ def osv_fixed(advisory, pkg):
         if (not isinstance(target, dict) or target.get("name") != pkg["name"]
                 or str(target.get("ecosystem", "")).lower() != str(pkg["ecosystem"]).lower()):
             continue
+        affected_versions.update(semver_key(v) for v in affected.get("versions") or [])
         for span in affected.get("ranges") or []:
-            for event in (span.get("events") or []) if isinstance(span, dict) else []:
-                if isinstance(event, dict) and "fixed" in event:
-                    return fixed_version(event["fixed"])
-    return None
+            if not isinstance(span, dict) or span.get("type") != "SEMVER":
+                continue
+            ranges = osv_intervals(span)
+            if not ranges:
+                return None
+            intervals.extend(ranges)
+
+    def affected_at(version, interval):
+        start, end, kind, _ = interval
+        return start <= version and (end is None or version < end or (kind == "last_affected" and version == end))
+
+    matches = [item for item in intervals if affected_at(installed, item)]
+    if not matches or any(kind != "fixed" for _, _, kind, _ in matches):
+        return None
+    _, candidate, _, value = max(matches, key=lambda item: item[1])
+    if candidate in affected_versions or any(affected_at(candidate, item) for item in intervals):
+        return None
+    return fixed_version(value)
 
 
 def osv(doc, root):

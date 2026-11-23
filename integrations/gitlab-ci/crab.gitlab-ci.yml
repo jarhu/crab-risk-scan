@@ -114,6 +114,9 @@ crab-scan:
         exit 2
       else
         mkdir -p "$CRAB_WORK_CACHE"
+        if [ -d /opt/crab/cache ]; then
+          cp -R /opt/crab/cache/. "$CRAB_WORK_CACHE/"
+        fi
       fi
       if [ "$CRAB_UPDATE_DB" = "true" ]; then
         crab-risk-scan db update --cache-dir "$CRAB_WORK_CACHE" "$CRAB_SCAN_PATH" || echo "Database update failed; scanning with the cached databases."
