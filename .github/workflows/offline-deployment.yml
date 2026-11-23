@@ -1,0 +1,36 @@
+name: Offline deployment
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - '.github/workflows/offline-deployment.yml'
+      - 'deployments/docker/**'
+      - 'compose.yaml'
+      - 'crab_risk_scan/**'
+      - 'web/**'
+      - 'tests/deployment/**'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - '.dockerignore'
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Offline scanner, SQLite and PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build images and exercise deployed services
+        run: python3 tests/deployment/smoke.py "$RUNNER_TEMP/offline-evidence"
+      - name: Save image digests, build inputs and smoke results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/offline-evidence/
+          if-no-files-found: error

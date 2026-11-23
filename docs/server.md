@@ -15,6 +15,12 @@ On the first start with an empty user table, the server creates an administrator
 
 Release wheels and the server image contain the WebUI. A source checkout needs `npm ci && npm run build` in `web/` first. Without the assets, `/` shows a page that explains this, and the API keeps working.
 
+## Offline deployment qualification
+
+From a clean checkout on a Linux Docker host with Buildx, Compose v2 and Python 3.10+, run `python3 tests/deployment/smoke.py /tmp/crab-offline-evidence` with a new output directory. The build needs network access for the pinned images, engines and rolling advisory databases. The scanner runs the dependency fixture with `--network none`. The harness then exercises the shipped Compose services with fresh SQLite and PostgreSQL volumes, checks both report exports and the SBOM, and verifies a real Git checkout on a separate internal network. It removes its own containers, volumes, networks and image tags when finished.
+
+The [Offline deployment workflow](https://github.com/jarhu/crab-risk-scan/actions/workflows/offline-deployment.yml) runs the same command. Its artifact contains the tested commit, CI attempt URL, build arguments, base image references, Docker tooling versions, dependency lock hashes, image manifest and config digests, database hashes, offline report and per-backend results. Use a passing artifact for the exact candidate commit during release qualification. Rolling database updates can change advisory counts between builds.
+
 ## Docker Compose
 
 `compose.yaml` at the repository root defines the deployment.
