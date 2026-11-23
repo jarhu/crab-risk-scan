@@ -329,7 +329,7 @@ def compact_markdown(report, exit_code):
     return "\n".join(lines)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow redirects: a redirect would resend the bearer token to another location."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -375,7 +375,7 @@ def upload(server, project, token, report, sbom=None, *, platform=None, timeout=
     request = urllib.request.Request(endpoint, data=data, method="POST", headers={
         "Authorization": f"Bearer {token}", "Content-Type": "application/json",
         "Accept": "application/json", "User-Agent": f"crab-risk-scan/{__version__}"})
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
             result["http_status"] = response.status

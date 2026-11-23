@@ -20,8 +20,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import __version__
+from .runner import NoRedirect
 from .server.config import parse_git_hosts
-from .server.safety import blocked_address, contained, host_allowed, unc_or_device
+from .server.safety import blocked_address, host_allowed, resolve_contained, unc_or_device, within
 
 LOG_LIMIT = 64 * 1024
 ERROR_LIMIT = 2000
@@ -113,7 +114,7 @@ class Client:
             "Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
             "Accept": "application/json", "User-Agent": f"crab-risk-scan-worker/{__version__}"})
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=self.timeout) as response:
                 payload = response.read()
                 return response.status, (json.loads(payload) if payload else None)
         except urllib.error.HTTPError as exc:
@@ -185,7 +186,7 @@ class Worker:
 
     # Sources ----------------------------------------------------------------------------------
 
-    def resolve_path(self, path):
+    def resolve_path(self, path, *, project_root=None):
         """Lexical checks first (UNC/device paths, containment), realpath only afterwards, so a
         job can never make the worker open a network path."""
         if not self.scan_roots:
@@ -196,9 +197,14 @@ class Worker:
             raise JobError("source path must not be a UNC or device path")
         if not os.path.isabs(path):
             raise JobError("source path must be absolute")
-        if not contained(path, self.scan_roots):
+        resolved = resolve_contained(path, self.scan_roots)
+        if resolved is None:
             raise JobError("source path is outside this worker's scan roots")
-        real = Path(os.path.realpath(path))
+        real = Path(resolved)
+        # The server supplies its canonical project boundary. Resolving that boundary
+        # again here would let a retargeted project directory authorize its sibling.
+        if project_root is not None and not within(real, project_root):
+            raise JobError("source path is outside the project's scan_path")
         if not real.is_dir():
             raise JobError("source path is not a directory on this worker")
         return real
@@ -318,7 +324,14 @@ class Worker:
         source, options = job.get("source") or {}, job.get("options") or {}
         revision = branch = None
         repository = job.get("repository_url")
-        if source.get("type") == "path":
+        if source.get("type") == "project_path":
+            root = source.get("root")
+            if not isinstance(root, str) or not os.path.isabs(root) or unc_or_device(root):
+                raise JobError("path job needs a project scan_path")
+            directory = self.resolve_path(source.get("path"), project_root=root)
+        elif source.get("type") == "path":
+            if source.get("scope") != "worker":
+                raise JobError("path job needs a server that supplies its authorized scope")
             directory = self.resolve_path(source.get("path"))
         elif source.get("type") == "git":
             directory = workdir / "checkout"

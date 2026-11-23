@@ -98,6 +98,7 @@ def claim(body: ClaimBody, request: Request, db=Depends(get_db), principal: Prin
         return Response(status_code=204)
     project = job_project(db, job)
     item = service.job_item(job, project.key)
+    item["source"] = service.leased_source(job.source, project.scan_path, settings.scan_roots)
     item["repository_url"] = project.repository_url
     return {"job": item, "lease_seconds": settings.lease_seconds}
 

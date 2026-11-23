@@ -363,6 +363,7 @@ def create_job(key: str, body: JobBody, request: Request, db=Depends(get_db),
                                      confined=not principal.is_admin)
     options = service.validate_options(body.options)
     service.check_queue_capacity(db, project.id)
+    source = service.queued_source(source, admin_source=principal.is_admin, scan_path=project.scan_path)
     job = service.new_job(project.id, source, options, settings)
     db.add(job)
     db.commit()

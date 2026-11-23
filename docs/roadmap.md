@@ -91,6 +91,16 @@ flowchart TD
 
 `scan` becomes the full scan and absorbs `collect`. Pass `--engines none` to import saved reports without running engines. Reports move to schema 3. Fingerprints change, so regenerate suppressions as exceptions v2 files. Python 3.10 is no longer supported.
 
+### Upgrading workers for project-confined path jobs
+
+Stop workers before upgrading the API, then restart them with the matching worker release.
+Path leases now carry their authorized scope. A worker with an incompatible lease fails
+the job. Existing queued path jobs use the project's current `scan_path` because older
+queue records did not retain the submitter's role. If an administrator needs to run one
+of those jobs outside the project boundary, submit it again after upgrading. Setting
+`scan_path` stores its canonical directory. Re-save a pre-upgrade project path that
+uses a filesystem alias so workers can compare it to the resolved scan directory.
+
 ## Later
 
 These items from the gap analysis follow the four phases: Opengrep taint rule packs, reachability, monorepo subprojects, an MCP server, signed report attestations and compliance mappings for OWASP, PCI DSS and the EU Cyber Resilience Act.
