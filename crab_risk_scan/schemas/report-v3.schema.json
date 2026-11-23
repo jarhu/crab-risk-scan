@@ -224,6 +224,7 @@
         "actionable": {"type": "integer", "minimum": 0},
         "suppressed": {"type": "integer", "minimum": 0},
         "disabled_findings": {"type": "integer", "minimum": 0},
+        "disabled_rules": {"type": "array", "items": {"type": "string", "maxLength": 513}, "uniqueItems": true},
         "violations": {
           "type": "array",
           "items": {

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy import func, not_, or_, select
 
-from ..policy import comparable_producers, verified_absence
+from ..policy import comparable_producers, stable_ids, verified_absence
 from . import service
 from .auth import Paging, Principal, get_db, get_principal, load_project
 from .db import Finding, Project, ProjectException, Scan, utcnow
@@ -113,19 +113,21 @@ def compare(scan_id: int, base: int = Query(...), db=Depends(get_db), principal:
     base_rows = db.execute(finding_rows(base_scan)).all()
     head = [(json.loads(data), row) for data, row in head_rows]
     previous = [(json.loads(data), row) for data, row in base_rows]
-    head_prints = {finding["fingerprint"] for finding, _ in head}
-    base_prints = {finding["fingerprint"] for finding, _ in previous}
+    stable = stable_ids(finding for finding, _ in previous)
+    same = stable & stable_ids(finding for finding, _ in head)
     keys = {project.id: project.key}
     base_summary, head_summary = service.summaries(db, [base_scan, head_scan], keys)
-    covered = comparable_producers(service.unpack(base_scan.report_gz), service.unpack(head_scan.report_gz))
-    missing = [(f, row) for f, row in previous if f["fingerprint"] not in head_prints]
+    head_report = service.unpack(head_scan.report_gz)
+    covered = comparable_producers(service.unpack(base_scan.report_gz), head_report)
+    disabled = set(head_report["policy"].get("disabled_rules", []))
+    missing = [(f, row) for f, row in previous if f["fingerprint"] not in same]
     return {
         "base": base_summary, "head": head_summary,
         "new": [service.finding_item(finding, row, day) for finding, row in head
-                if finding["fingerprint"] not in base_prints],
-        "fixed": [service.finding_item(f, row, day) for f, row in missing if verified_absence(f, covered)],
-        "unverified": [service.finding_item(f, row, day) for f, row in missing if not verified_absence(f, covered)],
-        "unchanged": sum(1 for finding, _ in head if finding["fingerprint"] in base_prints),
+                if finding["fingerprint"] not in same],
+        "fixed": [service.finding_item(f, row, day) for f, row in missing if verified_absence(f, covered, stable, disabled)],
+        "unverified": [service.finding_item(f, row, day) for f, row in missing if not verified_absence(f, covered, stable, disabled)],
+        "unchanged": len(same),
     }
 
 

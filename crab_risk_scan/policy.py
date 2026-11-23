@@ -234,7 +234,7 @@ def comparable_producers(base, head):
     """Producers with evidence of equivalent scope and successful head coverage."""
     if (not head.get("target") or base.get("target") != head["target"]
             or base.get("repository") != head.get("repository")
-            or head.get("policy", {}).get("disabled_findings")
+            or (head.get("policy", {}).get("disabled_findings") and "disabled_rules" not in head["policy"])
             or any(not e.get("producer") and not e.get("path") for e in head["errors"])):
         return set()
     blocked = {e.get("producer", "crab") for e in head["errors"]}
@@ -255,9 +255,13 @@ def comparable_producers(base, head):
     return covered
 
 
-def verified_absence(finding, covered):
-    return (finding["producer"] in covered and finding["rule"] != LICENSE_RULE
-            and finding["category"] != "container")
+def stable_ids(findings):
+    return {f["fingerprint"] for f in findings if exception_eligible(f)}
+
+
+def verified_absence(finding, covered, stable, disabled):
+    return (finding["fingerprint"] in stable and finding["producer"] in covered and finding["rule"] != LICENSE_RULE
+            and finding["category"] != "container" and f"{finding['producer']}/{finding['rule']}" not in disabled)
 
 
 def load_base(value):
@@ -266,6 +270,12 @@ def load_base(value):
         doc = read_document(value, BASE_LIMIT)
         if doc["schema_version"] != 3 or not isinstance(doc["findings"], list):
             raise ValueError("expected schema 3")
+        imports = doc.get("imports", [])
+        if not isinstance(imports, list) or any(not isinstance(i, dict) or not isinstance(i.get("producer"), str)
+                or i.get("origin") not in {"engine", "report", "manifest"}
+                or i.get("status") not in {"complete", "imported", "failed", "partial", "skipped"}
+                or not (i.get("targets") is None or type(i["targets"]) is int) for i in imports):
+            raise ValueError("invalid base coverage")
         revision = nullable(doc.get("revision"), token)
         entries = {}
         for hit in doc["findings"]:
@@ -431,6 +441,7 @@ def evaluate(report, *, policy=None, exceptions=None, fail_on=None, new_since=No
     # 1. Rule profile.
     kept = [f for f in findings if f"{f['producer']}/{f['rule']}" not in rules.disabled]
     disabled = len(findings) - len(kept) + previous.get("disabled_findings", 0)
+    disabled_rules = set(previous.get("disabled_rules", [])) | rules.disabled
     for hit in kept:
         override = rules.severity.get(f"{hit['producer']}/{hit['rule']}")
         if override:
@@ -477,14 +488,15 @@ def evaluate(report, *, policy=None, exceptions=None, fail_on=None, new_since=No
     if "base" in loaded:
         base_revision, base, base_report = loaded["base"]
         covered = comparable_producers(base_report, report)
-        current = {f["fingerprint"] for f in kept}
+        stable = stable_ids(base_report["findings"])
+        same = stable & stable_ids(kept)
         for hit in kept:
-            hit["new"] = hit["fingerprint"] not in base
-        missing = sorted((e for k, e in base.items() if k not in current), key=sort_key)
+            hit["new"] = hit["fingerprint"] not in same
+        missing = sorted((e for k, e in base.items() if k not in same), key=sort_key)
         fixed, unverified = [], []
         for entry in missing:
-            rule = f"{entry['producer']}/{entry['rule']}"
-            (fixed if verified_absence(entry, covered) and rule not in rules.disabled else unverified).append(entry)
+            bucket = fixed if verified_absence(entry, covered, stable, disabled_rules) else unverified
+            bucket.append(entry)
         report["comparison"] = {"base_revision": base_revision, "new": sum(f["new"] for f in kept),
                                 "unchanged": sum(not f["new"] for f in kept), "fixed": fixed, "unverified": unverified}
     elif "comparison" in report:
@@ -524,6 +536,8 @@ def evaluate(report, *, policy=None, exceptions=None, fail_on=None, new_since=No
                         "disabled_findings": disabled, "violations": violations,
                         "expired_exceptions": [{"fingerprint": k, "expires": v} for k, v in sorted(expired.items())],
                         "stale_exceptions": stale}
+    if disabled_rules:
+        report["policy"]["disabled_rules"] = sorted(disabled_rules)
     reordered = ordered(report, REPORT_ORDER)
     report.clear()
     report.update(reordered)

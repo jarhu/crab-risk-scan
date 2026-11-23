@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import tempfile
@@ -7,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from crab_risk_scan.adapters import checkov, gitleaks, sarif
-from crab_risk_scan.evidence import assign_fingerprints, fingerprint, purl_key
+from crab_risk_scan.evidence import assign_fingerprints, purl_key
 from test_reports import cli, validate
 
 
@@ -176,6 +175,16 @@ class ArchitectureTests(unittest.TestCase):
         self.assertEqual(doc["policy"]["stale_exceptions"], [hit["fingerprint"]])
         (self.root / "app.env").unlink()
         self.assertFalse(self.collect(1, "--gitleaks", leaks, "--exceptions", exceptions)["findings"][0]["suppressed"])
+
+    def test_new_only_gate_keeps_unverified_credentials_actionable(self):
+        leaks = self.save("leaks.json", [{"RuleID": "generic-api-key", "File": "unavailable.env", "StartLine": 1,
+                                          "EndLine": 1, "StartColumn": 1, "EndColumn": 8}])
+        base = self.save("base.json", self.collect(1, "--gitleaks", leaks))
+        policy = self.save("new-only.json", {"version": 1, "new_only": True})
+        head = self.collect(1, "--gitleaks", leaks, "--policy", policy, "--new-since", base)
+        self.assertTrue(head["findings"][0]["new"])
+        self.assertEqual(len(head["comparison"]["unverified"]), 1)
+        self.assertFalse(head["comparison"]["fixed"])
 
     def test_checkov_secret_results_drop_the_secret_hash(self):
         secret_hash = "25910f981e85ca04baf359199dd0bd4a3ae738b6"
