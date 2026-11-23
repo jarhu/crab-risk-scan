@@ -104,12 +104,17 @@ def main(evidence):
             report = offline(images["scanner"], directory, evidence)
             record["tests"]["network_none"] = {"exit": 1, "findings": len(report["findings"]),
                                                 "engines": ["trivy", "osv"]}
-            target = directory / "inventory"
+            # Docker exposes the mounted directory's own mode to the non-root API and worker.
+            # Keep the private TemporaryDirectory outside the mount.
+            scan_root = directory / "scan"
+            scan_root.mkdir()
+            scan_root.chmod(0o755)
+            target = scan_root / "inventory"
             shutil.copytree(ROOT / "examples/inventory", target)
             shutil.copy(ROOT / "examples/demo/client.py", target)
             env = dict(os.environ, SMOKE_SERVER_IMAGE=images["server"], SMOKE_SCANNER_IMAGE=images["scanner"])
             for backend in ("sqlite", "postgres"):
-                record["tests"][backend] = run_stack(backend, project + "-" + backend, env, target, report)
+                record["tests"][backend] = run_stack(backend, project + "-" + backend, env, scan_root, report)
             record["tests"]["git_pinning"] = git_pinning(images["scanner"], project)
         record["passed"] = True
     finally:

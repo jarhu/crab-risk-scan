@@ -88,9 +88,9 @@ def verify_exports(api, job):
             "exports": ["markdown", "docx"]}
 
 
-def run_stack(backend, project, env, target, report):
+def run_stack(backend, project, env, scan_root, report):
     password = secrets.token_hex(20)
-    env = dict(env, CRAB_SCAN_DIR=str(target.parent), CRAB_ADMIN_USERNAME="admin",
+    env = dict(env, CRAB_SCAN_DIR=str(scan_root), CRAB_ADMIN_USERNAME="admin",
                CRAB_ADMIN_PASSWORD=secrets.token_hex(20), POSTGRES_PASSWORD=password,
                CRAB_LOGIN_MAX_FAILURES_PER_CLIENT="2", CRAB_WORKERS="1", CRAB_WORKER_TOKEN="",
                CRAB_BIND="127.0.0.1", CRAB_PORT="0", CRAB_GIT_HOSTS="", COMPOSE_PROFILES="",
@@ -122,7 +122,10 @@ def run_stack(backend, project, env, target, report):
             if job["status"] in {"succeeded", "failed", "cancelled"}:
                 break
             time.sleep(1)
-        assert job["status"] == "succeeded" and job["attempts"] == 1, (job["status"], job.get("error"))
+        if job["status"] != "succeeded" or job["attempts"] != 1:
+            compose("logs", "--no-color", "--tail", "40", "worker")
+            raise AssertionError(f"{backend} job {job['id']}: {job['status']} after "
+                                 f"{job['attempts']} attempt(s), error={job.get('error')}")
         result = verify_exports(api, job)
         if backend == "sqlite":
             query = ("import sqlite3; db=sqlite3.connect('file:/var/lib/crab/crab.db?mode=ro', uri=True); "
